@@ -15,19 +15,19 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: 检出源码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: 设置 Node.js 环境
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
       - name: 设置 Go 环境
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: 修改 package.json 版本号（追加 commit 哈希）
         run: |
@@ -55,7 +55,7 @@ jobs:
           GOOS=linux CGO_ENABLED=0 GOARCH=${{ matrix.arch }} go build -ldflags="-s -w" -o ../fluxor-${{ matrix.arch }}
 
       - name: 上传 fluxor-${{ matrix.arch }} 作为 Artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: fluxor-${{ matrix.arch }}
           path: fluxor-${{ matrix.arch }}
@@ -91,7 +91,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: 下载所有构建产物
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           path: artifacts
 
