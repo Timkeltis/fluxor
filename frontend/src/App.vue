@@ -28,7 +28,8 @@ import {
   CloseCircleOutline,
   AlertCircleOutline,
   CloseOutline,
-  ApertureOutline
+  ApertureOutline,
+  InformationCircleOutline
 } from '@vicons/ionicons5'
 
 // 视图组件导入
@@ -335,7 +336,7 @@ onUnmounted(() => {
           <!-- 应用 Logo 图标 -->
           <div class="w-8 h-8 flex items-center justify-center shrink-0 transition-transform duration-500 text-accent"
                :class="globalStore.isSidebarCollapsed ? 'rotate-180' : 'rotate-0'">
-            <ApertureOutline class="w-5.5 h-5.5" />
+            <ApertureOutline class="w-[22px] h-[22px]" />
           </div>
           <!-- 标题，随折叠平滑收缩 -->
           <span class="font-bold text-sm text-slate-700 dark:text-slate-200 tracking-wider transition-all duration-300 ease-in-out whitespace-nowrap overflow-hidden"
@@ -525,8 +526,8 @@ onUnmounted(() => {
     <div class="flex-1 flex flex-col min-w-0">
       <main class="flex-1 my-3 mx-3 md:my-4 md:mx-4 h-[calc(100vh-24px)] md:h-[calc(100vh-32px)] flex flex-col min-h-0 select-none overflow-hidden pb-14 md:pb-0">
         <div class="max-w-7xl mx-auto w-full flex flex-col flex-1 min-h-0">
-          <KeepAlive :max="6">
-            <component :is="activeComponent" class="flex flex-col flex-1 min-h-0" />
+          <KeepAlive :max="7">
+            <component :is="activeComponent" :key="globalStore.activeTab" class="flex flex-col flex-1 min-h-0" />
           </KeepAlive>
         </div>
       </main>
@@ -687,9 +688,9 @@ onUnmounted(() => {
                 'bg-emerald-500/10 text-emerald-500 ring-emerald-500/5 dark:bg-emerald-500/20': globalStore.confirmDialog.type === 'success',
                 'bg-accent/10 text-accent ring-accent/5 dark:bg-accent/20': globalStore.confirmDialog.type === 'info'
               }">
-              <AlertCircleOutline v-if="globalStore.confirmDialog.type === 'danger' || globalStore.confirmDialog.type === 'warning'" class="w-5.5 h-5.5" />
-              <CheckmarkCircleOutline v-else-if="globalStore.confirmDialog.type === 'success'" class="w-5.5 h-5.5" />
-              <InformationCircleOutline v-else class="w-5.5 h-5.5" />
+              <AlertCircleOutline v-if="globalStore.confirmDialog.type === 'danger' || globalStore.confirmDialog.type === 'warning'" class="w-[22px] h-[22px]" />
+              <CheckmarkCircleOutline v-else-if="globalStore.confirmDialog.type === 'success'" class="w-[22px] h-[22px]" />
+              <InformationCircleOutline v-else class="w-[22px] h-[22px]" />
             </div>
 
             <!-- 文字区域 -->

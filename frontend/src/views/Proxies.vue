@@ -156,6 +156,7 @@ const handleTestAll = async () => {
   globalStore.showToast(t('proxies.testing_all'), 'info')
   try {
     const groups = proxyGroups.value // 所有组
+    let failedGroups = 0
     for (const group of groups) {
       const groupName = group.name
       const testURL = 'http://www.gstatic.com/generate_204'
@@ -177,10 +178,17 @@ const handleTestAll = async () => {
         // 每完成一组刷新一次（立即更新UI）
         proxyStore.fetchProxies(true)
       } else {
+        failedGroups++
         console.warn(`组 ${groupName} 测速失败`)
       }
     }
-    globalStore.showToast(t('proxies.test_complete'), 'success')
+    if (groups.length > 0 && failedGroups === groups.length) {
+      globalStore.showToast(t('common.operation_failed'), 'error')
+    } else if (failedGroups > 0) {
+      globalStore.showToast(`${t('proxies.test_complete')} (${failedGroups})`, 'warning')
+    } else {
+      globalStore.showToast(t('proxies.test_complete'), 'success')
+    }
   } catch (e) {
     globalStore.showToast(t('common.operation_failed'), 'error')
   } finally {

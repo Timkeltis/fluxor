@@ -37,7 +37,7 @@ fluxor/
 │   ├── go.mod / go.sum    # Go module 定义与依赖
 │   └── dist/              # 构建产物目录（由 `make sync` 从 frontend/dist 同步，已 gitignore）
 └── frontend/              # 主维护 Vue 3 前端源码目录
-    ├── package.json       # Vue 3.4 + Pinia + vue-i18n 9 + Vite 5 + Tailwind CSS 3 + TypeScript 5 + @vicons/ionicons5
+    ├── package.json       # Vue 3.5 + Pinia 4 + vue-i18n 11 + Vite 8 (Rolldown) + Tailwind CSS 3 + TypeScript 5.9 + @vicons/ionicons5
     ├── vite.config.js     # 构建输出到 dist/（index.html + assets/），无重定位插件
     ├── tailwind.config.js # data-theme 暗黑模式 + 扩展 accent/success/danger/warning 颜色
     ├── postcss.config.js  # Tailwind + Autoprefixer
@@ -74,7 +74,7 @@ fluxor/
 
 > **构建流程**：`make` → ① `frontend`：`npm run build` 输出到 `frontend/dist/`；② `sync`：拷贝至 `backend/dist/`；③ `backend`：在 `backend/` 内 `go build`（依赖 `//go:embed dist`）并输出二进制到项目根目录 `./fluxor`。
 
-> **页面路由机制**：未使用 vue-router，通过 `globalStore.activeTab` 与 `<component :is="..." />` 动态组件切换视图。在此基础上，外层包裹了 `<KeepAlive :max="6">` 进行视图缓存，以长效留存页面各交互状态（如滚动进度与折叠状态）并规避切换页面时的重复连接请求。
+> **页面路由机制**：未使用 vue-router，通过 `globalStore.activeTab` 与 `<component :is="..." />` 动态组件切换视图。在此基础上，外层包裹了 `<KeepAlive :max="7">`（与视图总数一致，避免 LRU 淘汰引发的重挂）进行视图缓存，以长效留存页面各交互状态（如滚动进度与折叠状态）并规避切换页面时的重复连接请求。
 
 ---
 
@@ -187,7 +187,7 @@ unsubscribe() → subscriberCount-- → 归零后延迟 3 秒（防抖）→ 若
   - 日志 WS：指数退避重连（1s → 2s → 4s → ... → 最大 30s）。
 
 **缓存留存**：
-- 流量历史（`overview.ts`）保留最近 60 个数据点。
+- 流量历史（`overview.ts`）保留最近 65 个数据点。
 - 日志缓冲区（`logs.ts`）上限 2000 条。
 - 已关闭连接（`connections.ts`）上限 100 条，超限时从旧到新截断。
 
@@ -212,8 +212,8 @@ unsubscribe() → subscriberCount-- → 归零后延迟 3 秒（防抖）→ 若
 
 ### 4.7 前端离线 Mock 联调机制
 为了方便前端脱离 Go 后端独立运行与联调，`frontend/src/utils/mock.ts` 实现了完整的 HTTP API 与 WebSocket 数据流模拟器。
-- **启用机制**：在 Vite 开发模式（`import.meta.env.DEV`）下默认开启，拦截网络请求并导入模拟数据。
-- **手动控制**：可通过在控制台修改 `localStorage` 的键 `MOCK_BACKEND` 来强制覆盖：
+- **启用机制**：仅在 Vite 开发模式（`import.meta.env.DEV`）下启用。`api.ts` 通过 `import.meta.env.DEV ? await import('./mock') : null` 动态装载，生产构建中模拟器模块整体被摇树移除，线上无法通过任何 localStorage 值开启。
+- **手动控制**（仅 DEV 有效）：可通过在控制台修改 `localStorage` 的键 `MOCK_BACKEND` 来强制覆盖：
   - 强制启用 Mock 模式：`localStorage.setItem('MOCK_BACKEND', 'true')`
   - 强制关闭 Mock（直接连接真实后端）：`localStorage.setItem('MOCK_BACKEND', 'false')`
 

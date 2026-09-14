@@ -46,7 +46,7 @@ interface ColumnDef {
   defaultVisible: boolean
   sortable: boolean
   getValue: (conn: any, tab: 'active' | 'closed') => string | number
-  specialRender?: 'host' | 'type' | 'upload' | 'download' | 'duration' | 'action'
+  specialRender?: 'host' | 'type' | 'upload' | 'download' | 'duration' | 'action' | 'rule'
 }
 
 const columnDefs: ColumnDef[] = [

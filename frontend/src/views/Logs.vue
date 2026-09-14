@@ -40,8 +40,9 @@ onDeactivated(() => {
   isActive.value = false
 })
 
-// 监听日志数量增加自动滚动底部，当组件处于后台时，静默冻结滚动计算
-watch(() => logs.value.length, () => {
+// 监听最新一条日志到达自动滚动底部（缓冲满 2000 条后 length 恒定，不能再以 length 作触发源）；
+// 组件处于后台（KeepAlive deactivated）时静默冻结滚动计算
+watch(() => logs.value[logs.value.length - 1], () => {
   if (isActive.value && autoScroll.value) {
     scrollToBottom()
   }

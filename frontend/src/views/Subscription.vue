@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, onUnmounted } from 'vue'
+import { ref, onMounted, onActivated, computed, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { apiFetch } from '../utils/api'
 import { MailOutline, EyeOutline, EyeOffOutline, SyncOutline, CreateOutline, TrashOutline, AddOutline, CloseOutline, InformationCircleOutline } from '@vicons/ionicons5'
@@ -289,8 +289,8 @@ const handleDeleteSub = async (index: number) => {
   if (!sub) return
 
   const result = await globalStore.showConfirm({
-    title: `${t('common.confirm')}${t('common.delete')}`,
-    message: `${t('common.confirm')}${t('common.delete')} ${sub.name}?`,
+    title: t('common.confirm_delete'),
+    message: `${t('common.confirm_delete')} ${sub.name}?`,
     type: 'danger',
     checkboxLabel: t('subscription.delete_physical_file'),
     checkboxDefault: true
@@ -432,6 +432,12 @@ const formatExpire = (expire: number) => {
 }
 
 onMounted(() => {
+  // 视图重新挂载时静默强制刷新订阅配置，避免长期显示陈旧数据（§4.1）
+  subscriptionStore.loadConfig(true)
+})
+
+onActivated(() => {
+  subscriptionStore.loadConfig(true)
 })
 
 onUnmounted(() => {
@@ -571,7 +577,7 @@ onUnmounted(() => {
             </span>
           </div>
           <div class="flex justify-between items-start gap-4">
-            <div class="min-width-0 flex-1">
+            <div class="min-w-0 flex-1">
               <span class="font-semibold text-slate-800 dark:text-slate-100 break-all">{{ item.name }}</span>
               <div class="text-xs text-slate-400 dark:text-slate-500 mt-1 select-all break-all flex items-center gap-1.5">
                 <button @click.stop="showUrls[idx] = !showUrls[idx]" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 focus:outline-none" :title="showUrls[idx] ? t('subscription.hide_url') : t('subscription.show_url')">

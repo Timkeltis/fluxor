@@ -129,7 +129,7 @@ const patchConfig = async (payload: Partial<ConfigData>) => {
       body: JSON.stringify(payload)
     })
     if (resp.ok) {
-      fetchConfigs()
+      fetchConfigs(true)
     } else {
       globalStore.showToast(t('common.operation_failed'), 'error')
     }
@@ -246,7 +246,7 @@ const handleStartCore = async () => {
       globalStore.showToast(t('config.core_start_success'), 'success')
       configStore.refreshCoreStatus()
       setTimeout(() => {
-        fetchConfigs()
+        fetchConfigs(true)
         overviewStore.fetchVersionAndStatus()
       }, 1500)
     } else {
@@ -308,7 +308,7 @@ const handleRestartCore = async () => {
     if (resp.ok) {
       globalStore.showToast(t('config.restart_sent'), 'success')
       setTimeout(() => {
-        fetchConfigs()
+        fetchConfigs(true)
         overviewStore.fetchVersionAndStatus()
       }, 1500)
     } else {
@@ -327,7 +327,7 @@ const handleReloadConfig = async () => {
     const resp = await apiFetch('/configs', { method: 'PUT' })
     if (resp.ok) {
       globalStore.showToast(t('config.reload_success'), 'success')
-      fetchConfigs()
+      fetchConfigs(true)
     } else {
       globalStore.showToast(t('config.reload_failed'), 'error')
     }
@@ -419,7 +419,7 @@ const handleUpgradeCore = async (channel?: string) => {
           attempts++
           await new Promise(resolve => setTimeout(resolve, 1000))
         }
-        fetchConfigs()
+        fetchConfigs(true)
       }, 2000) // 初始延迟 2 秒
     } else {
       // 错误处理（保持不变）

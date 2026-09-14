@@ -6,6 +6,7 @@ const messages = {
     'common.error': '错误',
     'common.success': '成功',
     'common.confirm': '确认',
+    'common.confirm_delete': '确认删除',
     'common.cancel': '取消',
     'common.delete': '删除',
     'common.edit': '编辑',
@@ -17,6 +18,7 @@ const messages = {
     'common.name_required': '名称和链接不能为空',
     'common.network_error': '网络错误',
     'common.operation_failed': '操作失败',
+    'subscription.operation_failed': '操作失败',
     'common.unknown': '未知',
     'common.show': '显示',
     'common.hide': '隐藏',
@@ -29,7 +31,7 @@ const messages = {
     'update.updating': '更新中...',
     'update.update_started': '正在更新，请稍后...',
     'update.update_failed': '更新失败',
-    'update.core_update_available': '内核新版本',
+    'update.core_update_available': '内核新版本 {latest}',
     'update.check_update': '检查更新',
     'update.already_latest': '当前已是最新版本',
     'update.checking': '检查更新中...',
@@ -125,7 +127,7 @@ const messages = {
     'proxies.sort_quality': '按质量',
     'proxies.quality_score': '计算节点质量评分',
     'proxies.filter_regex': '节点过滤正则',
-    'proxies.filter_regex_placeholder': '输入正则表达式，如 ^(HK|JP).*',
+    'proxies.filter_regex_placeholder': "输入正则表达式，如 ^(HK{'|'}JP).*",
 
     'rules.title': '规则',
     'rules.type': '类型',
@@ -445,6 +447,7 @@ const messages = {
     'common.error': 'Error',
     'common.success': 'Success',
     'common.confirm': 'Confirm',
+    'common.confirm_delete': 'Confirm Delete',
     'common.cancel': 'Cancel',
     'common.delete': 'Delete',
     'common.edit': 'Edit',
@@ -456,6 +459,7 @@ const messages = {
     'common.name_required': 'Name and URL cannot be empty',
     'common.network_error': 'Network error',
     'common.operation_failed': 'Operation failed',
+    'subscription.operation_failed': 'Operation failed',
     'common.unknown': 'Unknown',
     'common.show': 'Show',
     'common.hide': 'Hide',
@@ -468,7 +472,7 @@ const messages = {
     'update.updating': 'Updating...',
     'update.update_started': 'Updating, please wait...',
     'update.update_failed': 'Update failed',
-    'update.core_update_available': 'New Mihomo Version',
+    'update.core_update_available': 'New Mihomo Version {latest}',
     'update.check_update': 'Check Update',
     'update.already_latest': 'Already using the latest version',
     'update.checking': 'Checking for updates...',
@@ -563,7 +567,7 @@ const messages = {
     'proxies.sort_quality': 'By Quality',
     'proxies.quality_score': 'Calculate Node Quality Score',
     'proxies.filter_regex': 'Node Filter Regex',
-    'proxies.filter_regex_placeholder': 'Enter regex, e.g. ^(HK|JP).*',
+    'proxies.filter_regex_placeholder': "Enter regex, e.g. ^(HK{'|'}JP).*",
 
     'rules.title': 'Rules',
     'rules.type': 'Type',
@@ -880,7 +884,9 @@ const messages = {
   }
 }
 
-const initialLang = localStorage.getItem('lang') || 'zh'
+const savedLang = localStorage.getItem('lang')
+// 白名单校验：脏值（zh-CN、en-US 等）会导致每次取词走 fallback 并逐键告警
+const initialLang = savedLang === 'zh' || savedLang === 'en' ? savedLang : 'zh'
 
 const i18n = createI18n({
   legacy: false, // 启用 Composition API 支持

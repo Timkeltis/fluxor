@@ -9,12 +9,15 @@ export interface ConnectionMetadata {
   sourcePort: number
   type: string
   network: string
+  process?: string
+  sourceIP?: string
 }
 
 export interface ConnectionItem {
   id: string
   metadata: ConnectionMetadata
   rule: string
+  rulePayload?: string
   chains: string[]
   upload: number
   download: number

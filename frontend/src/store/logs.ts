@@ -51,7 +51,7 @@ export const useLogStore = defineStore('logs', () => {
         item = {
           id: Date.now() + Math.random(),
           type: data.type || 'info',
-          payload: data.payload || data,
+          payload: typeof data.payload === 'string' ? data.payload : JSON.stringify(data.payload ?? data),
           time: formatTime(new Date())
         }
       } catch (err) {
