@@ -26,6 +26,7 @@ FRONTEND_DIST = $(FRONTEND_DIR)/dist
 BACKEND_DIST  = $(BACKEND_DIR)/dist
 BIN          ?= fluxor
 GO           ?= go
+GOFLAGS      ?= -ldflags="-s -w"
 
 # 默认目标：完整构建
 .PHONY: all frontend sync backend run clean
