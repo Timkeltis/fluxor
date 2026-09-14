@@ -7,15 +7,10 @@
 ## 1. 项目定位与架构概述
 
 `Fluxor` 是一个轻量级、无冗余的 Mihomo 内核管理面板与订阅生成系统。它采用**前后端不分离**的架构设计：
-- **后端 (Go)**：使用 Go 1.26 标准库（仅引入 `gorilla/websocket` 作为唯一外部依赖）。后端托管在 Unix Socket (`/var/apps/Fluxor/target/app.sock`) 上，对外通过前端反向代理暴露，内嵌了前端的所有静态资源。
-- **前端双版本并存与条件编译**：
-  为了维护旧版的前端原生加载独立性，同时满足现代客户端的体验，项目支持**双版本前端分流编译**：
-  1. **Vanilla JS 版（旧版，默认）**：无需任何构建步骤，直接嵌入 `static/` 目录的静态原生 HTML/JS 源码。
-  2. **Vue 3 TypeScript 版（新版，主维护）**：源码位于 `web/` 目录，由 Vue 3 (Composition API / Setup) + Vite + TailwindCSS + Pinia + TypeScript 构成。
-  - **分流机制**：后端利用 Go 条件编译标签进行控制：
-    - `assets_vanilla.go` (go:build !vue)：默认构建 Vanilla JS 前端。
-    - `assets_vue.go` (go:build vue)：使用 `-tags vue` 参数时，自动嵌入 `web/dist` 中的 Vue 3 前端。
-  - **开发环境编译**：任何新功能或漏洞修复请**首选在 Vue 3 版本中维护**，修改 Vue 代码后，需在 `web` 目录下执行 `npm run build`。
+- **后端 (Go)**：位于 `backend/` 目录，使用 Go 1.26 标准库（仅引入 `gorilla/websocket` 作为唯一外部依赖）。后端托管在 Unix Socket (`/var/apps/Fluxor/target/app.sock`) 上，对外通过前端反向代理暴露，内嵌了前端的所有静态资源。
+- **前端 (Vue 3 TypeScript 版)**：位于 `frontend/` 目录，由 Vue 3 (Composition API / Setup) + Vite + TailwindCSS + Pinia + TypeScript 构成，是项目唯一且主维护的前端实现。
+  - **前端构建与内嵌**：`frontend/` 使用 Vite 构建，产物输出到 `frontend/dist/`（含 `index.html` 模板与 `assets/` 静态资源）。通过 `make sync`（或完整 `make`）将 `frontend/dist` 同步到 `backend/dist/`，后端在 `backend/main.go` 中以 `//go:embed dist` 直接内嵌该产物。
+  - **开发环境编译**：任何新功能或漏洞修复请在 Vue 3 版本中维护，修改前端代码后，需在 `frontend` 目录下执行 `npm run build`，并在项目根目录执行 `make` 完成整体构建。
 
 ### 核心功能职责
 
@@ -29,34 +24,35 @@
 
 ```text
 fluxor/
-├── main.go                 # 程序入口，路由注册，Unix Socket 监听，WebSocket 双向代理 (wsProxyHandler)
-├── assets_vanilla.go       # 嵌入旧版静态资源 (go:build !vue)
-├── assets_vue.go           # 嵌入 Vue 版编译产物 (go:build vue)
-├── handlers_core.go        # 内核进程生命周期（start/stop/restart/coreRequest/cancelableReadCloser）
-├── handlers_api.go         # 代理内核 HTTP API（流量、内存、连接、代理、规则、配置、DNS、GEO、升级等）
-├── handlers_tproxy.go      # TProxy 防火墙与路由规则管理，例外 IP/端口过滤，本地出站代理控制
-├── handlers_index.go       # 主页入口 index.html 模板渲染
-├── handlers_utils.go       # JSON 错误响应工具 (writeJSONError/respondJSON) 及后端地址正则校验
-├── subscribe.go            # 订阅配置 CRUD、config.yaml 生成、模板替换、MetaCubeXD config.js 修改
-├── build/                  # 跨平台自动化编译与打包工具链（含 config_lite/base/full.yaml 模板）
-├── static/                 # 旧版原生 Vanilla JS 前端目录
-└── web/                    # 主维护 Vue 3 前端源码目录
-    ├── package.json        # Vue 3.4 + Pinia + vue-i18n 9 + Vite 5 + Tailwind CSS 3 + TypeScript 5 + @vicons/ionicons5
-    ├── vite.config.js      # 自定义 fluxorBuildPlugin：构建后将 index.html 移至 static/html/ 适配 embed.FS
-    ├── tailwind.config.js  # data-theme 暗黑模式 + 扩展 accent/success/danger/warning 颜色
-    ├── postcss.config.js   # Tailwind + Autoprefixer
-    ├── index.html          # HTML 入口
+├── Makefile               # 统一构建入口：make / make frontend / make backend / make sync / make run / make clean
+├── backend/               # Go 后端源码目录（独立 Go module，root 位于 backend/go.mod）
+│   ├── main.go            # 程序入口，路由注册，Unix Socket 监听，WebSocket 双向代理 (wsProxyHandler)，
+│   │                      #   并以 //go:embed dist 内嵌前端构建产物（嵌入代码已并入本文件）
+│   ├── handlers_core.go   # 内核进程生命周期（start/stop/restart/coreRequest/cancelableReadCloser）
+│   ├── handlers_api.go    # 代理内核 HTTP API（流量、内存、连接、代理、规则、配置、DNS、GEO、升级等）
+│   ├── handlers_tproxy.go # TProxy 防火墙与路由规则管理，例外 IP/端口过滤，本地出站代理控制
+│   ├── handlers_index.go  # 主页入口 index.html 模板渲染
+│   ├── handlers_utils.go  # JSON 错误响应工具 (writeJSONError/respondJSON) 及后端地址正则校验
+│   ├── subscribe.go       # 订阅配置 CRUD、config.yaml 生成、模板替换、MetaCubeXD config.js 修改
+│   ├── go.mod / go.sum    # Go module 定义与依赖
+│   └── dist/              # 构建产物目录（由 `make sync` 从 frontend/dist 同步，已 gitignore）
+└── frontend/              # 主维护 Vue 3 前端源码目录
+    ├── package.json       # Vue 3.4 + Pinia + vue-i18n 9 + Vite 5 + Tailwind CSS 3 + TypeScript 5 + @vicons/ionicons5
+    ├── vite.config.js     # 构建输出到 dist/（index.html + assets/），无重定位插件
+    ├── tailwind.config.js # data-theme 暗黑模式 + 扩展 accent/success/danger/warning 颜色
+    ├── postcss.config.js  # Tailwind + Autoprefixer
+    ├── index.html         # HTML 入口（Go 模板：{{.BaseHref}} / {{.RawBase}}）
     └── src/
-        ├── main.ts         # 挂载 Pinia + vue-i18n (Composition API, legacy:false)
-        ├── App.vue         # 根组件：响应式侧边栏/移动端底部 Tab、亮暗/跟随系统主题、中英切换、Toast 队列、Promise 确认框、统一轮询 coreStatus 状态
-        ├── env.d.ts        # .vue 类型声明 & Window.BASE_URL 接口扩展
-        ├── i18n.ts         # 全站国际化（zh/en），从 localStorage 读取语言偏好，禁止硬编码中文
-        ├── index.css       # Tailwind 基础指令 + CSS 变量亮暗主题（data-theme 选择器）+ 自定义滚动条
-        ├── components/     # 公共及细粒度组件 (ProxyGroupCard, FormSwitch)
-        ├── composables/    # 全局解耦组合式函数 (useTheme, useLanguage)
+        ├── main.ts        # 挂载 Pinia + vue-i18n (Composition API, legacy:false)
+        ├── App.vue        # 根组件：响应式侧边栏/移动端底部 Tab、亮暗/跟随系统主题、中英切换、Toast 队列、Promise 确认框、统一轮询 coreStatus 状态
+        ├── env.d.ts       # .vue 类型声明 & Window.BASE_URL 接口扩展
+        ├── i18n.ts        # 全站国际化（zh/en），从 localStorage 读取语言偏好，禁止硬编码中文
+        ├── index.css      # Tailwind 基础指令 + CSS 变量亮暗主题（data-theme 选择器）+ 自定义滚动条
+        ├── components/    # 公共及细粒度组件 (ProxyGroupCard, FormSwitch)
+        ├── composables/   # 全局解耦组合式函数 (useTheme, useLanguage)
         ├── utils/
-        │   ├── api.ts      # withBase() 拼接 BASE_URL、apiFetch() HTTP 封装、wsConnect() WebSocket 封装（自动 ws/wss 协议选择）
-        │   └── mock.ts     # 前端离线开发模拟器：拦截 HTTP/WS 请求提供 mock 数据，支持脱离后端独立测试
+        │   ├── api.ts     # withBase() 拼接 BASE_URL、apiFetch() HTTP 封装、wsConnect() WebSocket 封装（自动 ws/wss 协议选择）
+        │   └── mock.ts    # 前端离线开发模拟器：拦截 HTTP/WS 请求提供 mock 数据，支持脱离后端独立测试
         ├── store/
         │   ├── global.ts   # 标签页激活状态、侧边栏折叠、亮暗/跟随系统主题、Toast 队列（3s 自动消失）、Promise 驱动确认框
         │   ├── config.ts   # 内核常规配置参数（allow-lan/ipv6/mode/log-level/tun/端口等，通过 app.vue 统一轮询 coreStatus，与订阅解耦）
@@ -76,6 +72,8 @@ fluxor/
             └── Subscription.vue # 订阅：代理/面板端口、密钥显隐切换、规则集（lite/base/full）、UI 面板选择、订阅 CRUD 模态框（zoomIn 动画，支持订阅名称、链接、检测间隔、节点前缀）、流量/健康度/有效期卡片、「保存并应用」
 ```
 
+> **构建流程**：`make` → ① `frontend`：`npm run build` 输出到 `frontend/dist/`；② `sync`：拷贝至 `backend/dist/`；③ `backend`：在 `backend/` 内 `go build`（依赖 `//go:embed dist`）并输出二进制到项目根目录 `./fluxor`。
+
 > **页面路由机制**：未使用 vue-router，通过 `globalStore.activeTab` 与 `<component :is="..." />` 动态组件切换视图。在此基础上，外层包裹了 `<KeepAlive :max="6">` 进行视图缓存，以长效留存页面各交互状态（如滚动进度与折叠状态）并规避切换页面时的重复连接请求。
 
 ---
@@ -84,7 +82,7 @@ fluxor/
 
 ### 3.1 统一路由前缀 (BASE_URL)
 所有的请求均有统一的基本路径前缀：`baseURL = "/app/Fluxor"`。
-在 Vue 源码中，所有 `apiFetch` 或 WebSocket 通信必须调用 [api.ts](web/src/utils/api.ts)，它会自动且妥善地完成前缀拼接。
+在 Vue 源码中，所有 `apiFetch` 或 WebSocket 通信必须调用 [api.ts](frontend/src/utils/api.ts)，它会自动且妥善地完成前缀拼接。
 
 ### 3.2 HTTP 代理流过早截断修复与 Context 释放
 前端向后端发起管理请求时，后端通过 Unix Socket 拨号并发 Do(req) 请求内核。为了防止大 JSON 数据（例如代理组数据、连接历史）在传输中因超时 Context 被提前取消导致流被中断（抛出 `Unterminated string in JSON` 错误），后端在 [handlers_core.go](handlers_core.go) 实现了：
@@ -154,7 +152,7 @@ func (c *cancelableReadCloser) Close() error {
 | `/delaytest/custom` | GET | `handleDelayTestCustom` | 测试用户自定义地址连通延迟 |
 | `/meta/` | GET | `http.FileServer` | MetaCubeXD 外部面板静态文件 |
 | `/zash/` | GET | `http.FileServer` | Zashboard 外部面板静态文件 |
-| `/static/` | GET | `http.FileServer` | 内嵌前端静态资源 |
+| `/assets/` | GET | `http.FileServer` | 内嵌前端构建静态资源（Vite assets 目录） |
 
 > 所有路由均挂载在 `baseURL = "/app/Fluxor"` 之下，如 `/app/Fluxor/core/status`。
 
@@ -199,12 +197,12 @@ unsubscribe() → subscriberCount-- → 归零后延迟 3 秒（防抖）→ 若
 - 前后端断开瞬间自动归档为已关闭连接。
 
 ### 4.4 批量测速并发控制规约
-- 无论是新版 Vue 3 还是旧版 Vanilla JS 前端，进行批量测速（全部测速或组测速）时，**必须强制实施并发控制（默认并发数限制为 10）**。绝对禁止一次性无限制发起数百个网络测速请求，防止浏览器连接队列拥堵与后端 Unix Socket 重试负载崩溃。
+- 无论是 Vue 3 前端中的批量测速（全部测速或组测速），**必须强制实施并发控制（默认并发数限制为 10）**。绝对禁止一次性无限制发起数百个网络测速请求，防止浏览器连接队列拥堵与后端 Unix Socket 重试负载崩溃。
 
 ### 4.5 弹窗与交互去原生化
 - 全站**绝对禁止使用**浏览器的阻塞式 `alert(...)`。如有提示需要，一律使用 `globalStore.showToast(text, 'success' | 'error' | 'warning' | 'info')` 发送非阻塞的全局自定义 Toast。
 - 确认操作使用 `globalStore.showConfirm({title, message, confirmText?, cancelText?})` 返回 Promise，在 `App.vue` 中以模态渲染。
-- 所有在页面上展示的图标**必须使用 `xicons` (@vicons/ionicons5)**，禁止在系统硬编码 SVG、Emoji 或颜文字符号（包括 `build/app/templates` 的内置配置模板中也绝对禁止在代理组和规则名中硬编码 Emoji），保持视觉绝对统一。
+- 所有在页面上展示的图标**必须使用 `xicons` (@vicons/ionicons5)**，禁止在系统硬编码 SVG、Emoji 或颜文字符号（包括内置配置模板中也绝对禁止在代理组和规则名中硬编码 Emoji），保持视觉绝对统一。
 
 ### 4.6 乐观更新与回滚
 涉及高频用户操作的接口（如代理选择切换、规则启用/禁用、连接断开）采用**乐观更新**策略：
@@ -213,7 +211,7 @@ unsubscribe() → subscriberCount-- → 归零后延迟 3 秒（防抖）→ 若
 3. 请求失败时自动回滚至更新前的状态。
 
 ### 4.7 前端离线 Mock 联调机制
-为了方便前端脱离 Go 后端独立运行与联调，`web/src/utils/mock.ts` 实现了完整的 HTTP API 与 WebSocket 数据流模拟器。
+为了方便前端脱离 Go 后端独立运行与联调，`frontend/src/utils/mock.ts` 实现了完整的 HTTP API 与 WebSocket 数据流模拟器。
 - **启用机制**：在 Vite 开发模式（`import.meta.env.DEV`）下默认开启，拦截网络请求并导入模拟数据。
 - **手动控制**：可通过在控制台修改 `localStorage` 的键 `MOCK_BACKEND` 来强制覆盖：
   - 强制启用 Mock 模式：`localStorage.setItem('MOCK_BACKEND', 'true')`

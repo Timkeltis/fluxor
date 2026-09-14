@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -17,7 +18,20 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// staticFS 内嵌前端构建产物 (frontend/dist) 的文件系统根
 var staticFS fs.FS
+
+//go:embed dist
+var distFS embed.FS
+
+func init() {
+	// dist 由 Makefile 在构建前端后同步到 backend/dist，并在此内嵌
+	sub, err := fs.Sub(distFS, "dist")
+	if err != nil {
+		panic(err)
+	}
+	staticFS = sub
+}
 
 var (
 	socketPath          string
@@ -192,7 +206,7 @@ func main() {
 	}
 
 	var err error
-	indexTmpl, err = template.ParseFS(staticFS, "static/html/index.html")
+	indexTmpl, err = template.ParseFS(staticFS, "index.html")
 	if err != nil {
 		fmt.Printf("加载主页模板失败: %v\n", err)
 		os.Exit(1)
@@ -259,12 +273,11 @@ func main() {
 	mux.Handle(baseURL+"/meta/", http.StripPrefix(baseURL+"/meta/", http.FileServer(http.Dir(metaDir))))
 	mux.Handle(baseURL+"/zash/", http.StripPrefix(baseURL+"/zash/", http.FileServer(http.Dir(zashDir))))
 
-	// 内嵌静态文件（直接使用 staticFS，并重写路径前缀以匹配内部目录结构）
+	// 内嵌静态文件（Vue 构建产物 assets/ 目录，直接挂载在 baseURL 下）
     staticFileServer := http.FileServer(http.FS(staticFS))
-    mux.Handle(baseURL+"/static/", http.StripPrefix(baseURL+"/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        r.URL.Path = "/static/" + r.URL.Path
-        staticFileServer.ServeHTTP(w, r)
-    })))
+    mux.Handle(baseURL+"/assets/", http.StripPrefix(baseURL, staticFileServer))
+    // 内嵌静态根文件（index.html 之外的静态资源，如 favicon ICON.PNG）
+    mux.Handle(baseURL+"/ICON.PNG", http.StripPrefix(baseURL, staticFileServer))
 
 	// 页面路由
 	if baseURL == "" {

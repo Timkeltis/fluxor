@@ -21,7 +21,7 @@ jobs:
         with:
           node-version: 24
           cache: 'npm'
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: 设置 Go 环境
         uses: actions/setup-go@v6
@@ -31,20 +31,26 @@ jobs:
       - name: 修改 package.json 版本号（追加 commit 哈希）
         run: |
           HASH=$(git rev-parse --short HEAD)
-          VERSION=$(jq -r '.version' web/package.json)
+          VERSION=$(jq -r '.version' frontend/package.json)
           NEW_VERSION="${VERSION}~${HASH}"
-          jq --arg new "$NEW_VERSION" '.version = $new' web/package.json > web/package.json.tmp && mv web/package.json.tmp web/package.json
+          jq --arg new "$NEW_VERSION" '.version = $new' frontend/package.json > frontend/package.json.tmp && mv frontend/package.json.tmp frontend/package.json
           echo "新版本号: $NEW_VERSION"
 
-      - name: 构建前端 (web)
-        working-directory: ./web
+      - name: 构建前端 (frontend)
+        working-directory: ./frontend
         run: |
           npm ci
           npm run build
 
+      - name: 同步前端构建产物到 backend/dist
+        run: |
+          rm -rf backend/dist
+          mkdir -p backend
+          cp -r frontend/dist backend/dist
+
       - name: 构建 Go 后端（amd64）
         run: |
-          GOOS=linux GOARCH=amd64 go build -tags vue -ldflags="-s -w" -o fluxor
+          cd backend && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o ../fluxor
 
       - name: 上传 fluxor 二进制作为 Artifact
         uses: actions/upload-artifact@v6
