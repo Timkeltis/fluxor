@@ -1,7 +1,67 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Tailwind CSS v4 入口。
+   v4 采用 CSS-first 配置，原 tailwind.config.js / postcss.config.js 已移除，
+   相关定制（content 扫描范围、暗色模式变体、语义色、尺寸档位）全部在本文件声明。 */
+@import "tailwindcss" source(none);
 
+/* 等价于 v3 tailwind.config.js 的 content 配置。
+   显式声明扫描范围并关闭自动探测，避免顺带扫描 node_modules 等目录导致产物膨胀。 */
+@source "../index.html";
+@source "./**/*.{vue,ts,js,jsx,tsx}";
+
+/* 等价于 v3 的 darkMode: ['class', '[data-theme="dark"]']。
+   v3 对该配置生成的暗色选择器为 `:is([data-theme="dark"] *)`，此处保持一致。 */
+@custom-variant dark (&:is([data-theme="dark"] *));
+
+/* 语义色：映射到下方各主题定义的 CSS 变量。
+   必须使用 `inline`，否则 v4 无法为 `var(--accent)` 这类非静态颜色生成
+   `bg-accent/10`、`ring-accent/30`、`shadow-accent/15` 等透明度修饰符。 */
+@theme inline {
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
+
+  /* 对齐 v3 的尺寸档位，保持原有视觉不变。
+     v4 的档位整体上移了一级（v4 的 shadow-sm 等同于 v3 的 shadow，
+     v4 的 rounded-sm 等同于 v3 的 rounded），此处覆盖回 v3 取值，
+     使站点无需改动任何类名即可维持原有效果。 */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --radius-sm: 0.125rem;
+}
+
+/* v4 的 preflight 不再为按钮设置手型光标（v3 有 `button,[role=button]{cursor:pointer}`），
+   会导致全站按钮鼠标形态由手型退化为默认箭头，此处补回。 */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+/* 还原 v3 的 space-y / space-x 语义。
+   v3 生成 `.space-y-3>:not([hidden])~:not([hidden])`（带类选择器，具备特异性），
+   v4 改为 `:where(.space-y-3>:not(:last-child))` 并对子元素设置 margin-block。
+   两者的两点差异会改变实际布局：
+     1) `:where()` 特异性为 0，导致子元素自身的 `my-*` 等外边距反过来覆盖 space-y
+        （如 Overview 卡片中 `my-2.5` 分隔线，实测使卡片高度少 2px）；
+     2) v4 给子元素加的是 margin-bottom，会与子元素已有的 margin-top 叠加。
+   此处按 v3 的形式重写，使间距与折叠行为完全一致。 */
+@utility space-y-* {
+  > :not([hidden]) ~ :not([hidden]) {
+    margin-top: calc(var(--spacing) * --value(number));
+    margin-bottom: 0;
+  }
+}
+
+@utility space-x-* {
+  > :not([hidden]) ~ :not([hidden]) {
+    margin-left: calc(var(--spacing) * --value(number));
+    margin-right: 0;
+  }
+}
+
+@layer utilities {
 /* 1. 主题变量 */
 
 :root {
@@ -917,4 +977,5 @@ aside {
   -webkit-backface-visibility: hidden;
   transform-style: preserve-3d;
   -webkit-transform-style: preserve-3d;
+}
 }
