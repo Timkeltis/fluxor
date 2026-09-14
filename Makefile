@@ -45,7 +45,7 @@ sync: $(FRONTEND_DIST)
 
 # 完整编译后端二进制（依赖 dist 已同步）
 backend: sync
-	cd $(BACKEND_DIR) && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build $(GOFLAGS) -o $(CURDIR)/$(BIN)
+	cd $(BACKEND_DIR) && CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build $(GOFLAGS) -buildvcs=false -o $(CURDIR)/$(BIN)
 
 # 开发运行后端（需先执行 make sync）
 run:

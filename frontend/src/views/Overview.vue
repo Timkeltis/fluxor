@@ -1063,7 +1063,7 @@ onUnmounted(() => {
                   @keyup.enter="testCustomDelay" />
                 <div class="flex items-center gap-3 shrink-0">
                   <span :class="getDelayDisplay(customResult).class"
-                    class="cursor-pointer hover:scale-[1.03] active:scale-95 animate-fade-in" @click="testCustomDelay">
+                    class="cursor-pointer hover:scale-[1.03] active:scale-95 animate-[fadeIn_0.2s]" @click="testCustomDelay">
                     {{ getDelayDisplay(customResult).text }}
                   </span>
                   <button @click="testCustomDelay" :disabled="customLoading || !customUrl.trim()"
