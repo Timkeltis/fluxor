@@ -129,7 +129,8 @@ const patchConfig = async (payload: Partial<ConfigData>) => {
       body: JSON.stringify(payload)
     })
     if (resp.ok) {
-      fetchConfigs(true)
+      // 静默同步：仅就地更新开关/端口/选项状态，不触发整卡遮罩与重渲染
+      fetchConfigs(false, true)
     } else {
       globalStore.showToast(t('common.operation_failed'), 'error')
     }
@@ -175,7 +176,7 @@ const savePorts = async (e?: Event) => {
   for (const p of ports) {
     if (p !== 0 && (p < 1025 || p > 65535)) {
       globalStore.showToast(t('config.port_invalid_hint'), 'error')
-      fetchConfigs(true)
+      fetchConfigs(false, true)
       return
     }
   }
@@ -183,7 +184,7 @@ const savePorts = async (e?: Event) => {
   const activePorts = ports.filter(p => p !== 0)
   if (new Set(activePorts).size !== activePorts.length) {
     globalStore.showToast(t('config.port_duplicate_hint'), 'error')
-    fetchConfigs(true)
+    fetchConfigs(false, true)
     return
   }
 
@@ -327,7 +328,8 @@ const handleReloadConfig = async () => {
     const resp = await apiFetch('/configs', { method: 'PUT' })
     if (resp.ok) {
       globalStore.showToast(t('config.reload_success'), 'success')
-      fetchConfigs(true)
+      // 重载属于配置同步，同样静默刷新，避免卡片标题闪烁
+      fetchConfigs(false, true)
     } else {
       globalStore.showToast(t('config.reload_failed'), 'error')
     }

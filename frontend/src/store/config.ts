@@ -48,9 +48,36 @@ export const useConfigStore = defineStore('config', () => {
   const tproxyStateLoaded = ref(false)      // 标记 TProxy 状态是否已加载
   let tproxyFetchPromise: Promise<boolean> | null = null
 
+  // 就地同步配置字段：只更新发生变化的键，保留 configs 对象与 tun 对象的引用，
+  // 使 Vue 仅重渲染受影响的绑定，而非整张卡片
+  const patchConfigsInPlace = (next: ConfigData) => {
+    const cur = configs.value
+    const setIfChanged = <K extends keyof ConfigData>(key: K, value: ConfigData[K]) => {
+      if (cur[key] !== value) cur[key] = value
+    }
+    setIfChanged('allow-lan', next['allow-lan'])
+    setIfChanged('ipv6', next.ipv6)
+    setIfChanged('mode', next.mode)
+    setIfChanged('log-level', next['log-level'])
+    setIfChanged('interface-name', next['interface-name'])
+    setIfChanged('port', next.port)
+    setIfChanged('socks-port', next['socks-port'])
+    setIfChanged('redir-port', next['redir-port'])
+    setIfChanged('tproxy-port', next['tproxy-port'])
+    setIfChanged('mixed-port', next['mixed-port'])
+    // tun 为嵌套对象，逐字段就地同步以保留其引用
+    const curTun = cur.tun
+    const nextTun = next.tun
+    if (curTun.enable !== nextTun.enable) curTun.enable = nextTun.enable
+    if (curTun.stack !== nextTun.stack) curTun.stack = nextTun.stack
+    if (curTun.device !== nextTun.device) curTun.device = nextTun.device
+  }
+
   // ---------- 获取内核配置（缓存 + 防并发） ----------
-  const fetchConfigs = async (forceLoading = false) => {
-    if (configsLoaded.value && !forceLoading) {
+  // forceLoading: 已加载过也强制重新拉取
+  // silent:       静默刷新，不触发 configsLoading（表单保存后同步状态用）
+  const fetchConfigs = async (forceLoading = false, silent = false) => {
+    if (configsLoaded.value && !forceLoading && !silent) {
       return
     }
     if (configsFetchPromise) {
@@ -58,7 +85,7 @@ export const useConfigStore = defineStore('config', () => {
     }
 
     const hasData = configs.value.port !== 0 || configs.value['mixed-port'] !== 0
-    if (forceLoading || !hasData) {
+    if (!silent && (forceLoading || !hasData)) {
       configsLoading.value = true
     }
 
@@ -83,7 +110,7 @@ export const useConfigStore = defineStore('config', () => {
             else if (s === 'mixed') normalizedStack = 'Mixed'
           }
 
-          configs.value = {
+          const next = {
             'allow-lan': data['allow-lan'] || false,
             ipv6: data.ipv6 || false,
             mode: normalizedMode,
@@ -99,6 +126,13 @@ export const useConfigStore = defineStore('config', () => {
             'redir-port': data['redir-port'] || 0,
             'tproxy-port': data['tproxy-port'] || 0,
             'mixed-port': data['mixed-port'] || 0
+          }
+          if (silent) {
+            // 静默刷新：仅就地同步各字段状态，不替换整个对象，
+            // 避免卡片整体重渲染导致标题闪烁
+            patchConfigsInPlace(next)
+          } else {
+            configs.value = next
           }
           configsLoaded.value = true
         }

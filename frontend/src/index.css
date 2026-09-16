@@ -91,6 +91,7 @@
   --bg-glass-medium: rgba(23, 31, 48, 0.45);
   --bg-glass-light: rgba(23, 31, 48, 0.25);
   --bg-mask: rgba(15, 23, 42, 0.5);
+  --bg-modal-panel: rgba(23, 31, 48, 0.90);
   --border-glass: rgba(255, 255, 255, 0.06);
 
   /* 全局交互与滚动条 */
@@ -131,6 +132,7 @@
   --bg-glass-medium: rgba(255, 255, 255, 0.45);
   --bg-glass-light: rgba(255, 255, 255, 0.25);
   --bg-mask: rgba(15, 23, 42, 0.2);
+  --bg-modal-panel: rgba(255, 255, 255, 0.92);
   --border-glass: rgba(15, 23, 42, 0.06);
 
   /* 浅色交互与滚动条 */
@@ -171,6 +173,7 @@
   --bg-glass-medium: rgba(10, 5, 22, 0.45);
   --bg-glass-light: rgba(18, 10, 36, 0.25);
   --bg-mask: rgba(10, 5, 22, 0.5);
+  --bg-modal-panel: rgba(18, 10, 36, 0.92);
   --border-glass: rgba(192, 132, 252, 0.15);
 
   /* 紫色交互与滚动条 */
@@ -212,6 +215,7 @@
   --bg-glass-medium: rgba(255, 255, 255, 0.45);
   --bg-glass-light: rgba(255, 241, 242, 0.25);
   --bg-mask: rgba(136, 19, 55, 0.12);
+  --bg-modal-panel: rgba(255, 255, 255, 0.92);
   --border-glass: rgba(244, 63, 94, 0.12);
 
   /* 粉色交互与滚动条 */
@@ -252,6 +256,7 @@
   --bg-glass-medium: rgba(255, 255, 255, 0.45);
   --bg-glass-light: rgba(240, 253, 244, 0.25);
   --bg-mask: rgba(5, 46, 22, 0.12);
+  --bg-modal-panel: rgba(255, 255, 255, 0.92);
   --border-glass: rgba(52, 199, 89, 0.12);
 
   /* 抹茶绿交互与滚动条 */
@@ -292,6 +297,7 @@
   --bg-glass-medium: rgba(255, 255, 255, 0.45);
   --bg-glass-light: rgba(240, 249, 255, 0.25);
   --bg-mask: rgba(8, 47, 73, 0.12);
+  --bg-modal-panel: rgba(255, 255, 255, 0.92);
   --border-glass: rgba(0, 122, 255, 0.12);
 
   /* 冰海蓝交互与滚动条 */
@@ -502,7 +508,6 @@
 [data-theme="blue"] aside {
   background-color: var(--bg-glass-heavy) !important;
   backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
 }
 
 [data-theme="pink"] .bg-slate-50\/50,
@@ -676,11 +681,18 @@ textarea:focus {
 
 /* 4. 磨砂玻璃与遮罩 */
 
+/* 以下磨砂规则只写标准属性 backdrop-filter，切勿手工再补 -webkit-backdrop-filter。
+   Vite 8 默认用 lightningcss 压缩 CSS：同一条规则内若同时出现标准属性与其 -webkit-
+   前缀，会被视为等价声明而只保留后写的一条。此前两者并存且 -webkit- 在后，压缩后
+   标准属性被丢弃，只剩 -webkit-，于是 Chrome / Firefox 等只认标准属性的浏览器完全
+   失去磨砂效果，而仍认该前缀的 Safari 正常 —— 表现为「只在部分浏览器上模糊失效」。
+   （实测 Chrome 153：既无 -webkit-backdrop-filter 属性、CSS.supports 也为 false。）
+   需要前缀的目标由构建工具按 build.cssTarget（默认 baseline）自动补齐，无需手写。 */
+
 .glass-heavy,
 [data-theme] .glass-heavy {
   background-color: var(--bg-glass-heavy) !important;
   backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   border-color: var(--border-glass) !important;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), 0 0 20px rgba(255, 255, 255, 0.01);
   /* 硬件加速 */
@@ -693,7 +705,6 @@ textarea:focus {
 [data-theme] .glass-medium {
   background-color: var(--bg-glass-medium) !important;
   backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   border-color: var(--border-glass) !important;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
   /* 硬件加速 */
@@ -711,7 +722,6 @@ textarea:focus {
 [data-theme] .glass-light {
   background-color: var(--bg-glass-light) !important;
   backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   border-color: var(--border-glass) !important;
   /* 硬件加速 */
   transform: translateZ(0);
@@ -724,11 +734,23 @@ textarea:focus {
 .glass-mask {
   background-color: var(--bg-mask) !important;
   backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   /* 硬件加速 */
   transform: translateZ(0);
   -webkit-transform: translateZ(0);
   will-change: backdrop-filter;
+}
+
+/* 弹窗内部面板（.glass-mask 的后代卡片）：提升背景不透明度，避免内容透底。
+   遮罩层 .glass-mask 自身带 backdrop-filter，会先把其后方整页内容模糊一次；
+   位于遮罩内的弹窗面板再叠加 backdrop-filter，只能采样到遮罩这一层，视觉上不再
+   产生额外模糊（实测开关面板的 blur 对渲染结果无影响）。因此弹窗的可读性实际
+   只取决于面板自身背景的不透明度：原 --bg-glass-heavy/medium 的 0.65/0.45 在
+   弹窗场景下明显过低，故改用独立的 --bg-modal-panel（约 0.9）。
+   遮罩层的模糊度与底色（--bg-mask）保持不变，仅调整弹窗内部。
+   选择器特异性与 [data-theme] .glass-heavy 同为 (0,2,0)，靠书写顺序居后者生效。 */
+.glass-mask .glass-heavy,
+.glass-mask .glass-medium {
+  background-color: var(--bg-modal-panel) !important;
 }
 
 /* 侧边栏激活 */
@@ -885,7 +907,6 @@ main .dark\:bg-slate-800,
 [data-theme="blue"] main .dark\:bg-\[\#1e293b\] {
   background-color: var(--bg-glass-medium) !important;
   backdrop-filter: blur(12px) !important;
-  -webkit-backdrop-filter: blur(12px) !important;
   /* 硬件加速 */
   transform: translateZ(0) !important;
   -webkit-transform: translateZ(0) !important;
@@ -977,5 +998,39 @@ aside {
   -webkit-backface-visibility: hidden;
   transform-style: preserve-3d;
   -webkit-transform-style: preserve-3d;
+  --live-lift: 3px;
+}
+
+/* 悬停上浮卡片的「命中区恒定」补偿。
+   卡片 hover 时上浮（Config/订阅为 3px），若指针落在卡片下沿数像素内，
+   会随上浮"掉出"卡片，:hover 随即失效 → 卡片落回 → 再次命中，
+   如此反复翻转形成反馈环；卡片连同其文字被持续重绘，看起来发虚、抖动。
+   这里用一层透明伪元素把下沿命中区补齐，并在悬停时反向位移与上浮等高的距离，
+   使其在视口中的位置在上浮前后完全一致，从根上切断反馈环。
+
+   几何（B = 卡片边框盒底边，L = 上浮高度，卡片为 1px 边框）：
+     静止：卡片覆盖 [., B]，伪元素覆盖 [B-L, B]
+     悬停：卡片覆盖 [., B-L]，伪元素随卡片上移 L 后反向位移 L → 仍覆盖 [B-L, B]
+   两态命中区完全相同，且伪元素不超出卡片自身的静止轮廓，不会遮挡相邻元素。
+
+   上浮高度通过 --live-lift 指定，必须与实际的上浮工具类一致；
+   伪元素使用与卡片相同的过渡曲线，保证两者同步移动。 */
+/* 节点卡片使用 hover:-translate-y-[2px]，此处同步为 2px */
+.live-card--lift-2 {
+  --live-lift: 2px;
+}
+
+.live-card::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: var(--live-lift);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.live-card:hover::after {
+  transform: translateY(var(--live-lift));
 }
 }
