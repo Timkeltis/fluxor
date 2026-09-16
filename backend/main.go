@@ -1,12 +1,22 @@
 package main
 
 import (
-	"context"
 	"embed"
+	"fluxor/internal/appupdate"
+	"fluxor/internal/config"
+	"fluxor/internal/configgen"
+	"fluxor/internal/core"
+	"fluxor/internal/dashapi"
+	"fluxor/internal/delaytest"
+	"fluxor/internal/netinfo"
+	"fluxor/internal/quality"
+	"fluxor/internal/subscription"
+	"fluxor/internal/tproxy"
+	"fluxor/internal/web"
+	"fluxor/internal/wsproxy"
 	"fmt"
 	"html/template"
 	"io/fs"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -14,8 +24,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-
-	"github.com/gorilla/websocket"
 )
 
 // staticFS 内嵌前端构建产物 (frontend/dist) 的文件系统根
@@ -31,81 +39,6 @@ func init() {
 		panic(err)
 	}
 	staticFS = sub
-}
-
-var (
-	socketPath          string
-	baseURL             string
-	fluxorPidFile       string
-	fluxorBinDir        string
-	corePidFile         string
-	coreBin             string
-	coreSocket          string
-	metaDir             string
-	zashDir             string
-	fluxorConfigFile    string
-	configTarget        string
-	infoLogFile         string
-	coreWorkDir         string
-	tcpAddr             string
-	originalBaseURL     string
-)
-
-func getEnv(key, defaultVal string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
-	}
-	return defaultVal
-}
-
-const (
-	metaConfigFile = "config.js"
-)
-
-var (
-	indexTmpl *template.Template
-	upgrader  = websocket.Upgrader{
-		CheckOrigin:     func(r *http.Request) bool { return true },
-		ReadBufferSize:  1024,
-		WriteBufferSize: 1024,
-	}
-)
-
-// setDefaults 根据运行模式设置默认路径
-func setDefaults(mode string) {
-	switch mode {
-	case "openwrt":
-		socketPath = ""
-		baseURL = "/"
-		tcpAddr = "0.0.0.0:18080"
-		fluxorPidFile = "/var/run/fluxor.pid"
-		fluxorBinDir = "/etc/fluxor/"
-		corePidFile = "/var/run/core.pid"
-		coreBin = "/etc/fluxor/mihomo"
-		coreSocket = "/etc/fluxor/core.sock"
-		metaDir = "/etc/fluxor/ui/meta"
-		zashDir = "/etc/fluxor/ui/zash"
-		fluxorConfigFile = "/etc/fluxor/fluxor.json"
-		configTarget = "/etc/fluxor/config.yaml"
-		infoLogFile = "/etc/fluxor/info.log"
-		coreWorkDir = "/etc/fluxor"
-	default: // fnos 模式（默认）
-		socketPath = "/var/apps/Fluxor/target/app.sock"
-		baseURL = "/app/Fluxor"
-		tcpAddr = ""
-		fluxorPidFile = "/var/apps/Fluxor/var/fluxor.pid"
-		fluxorBinDir = "/var/apps/Fluxor/target/bin/"
-		corePidFile = "/var/apps/Fluxor/var/core.pid"
-		coreBin = "/var/apps/Fluxor/target/bin/mihomo"
-		coreSocket = "/var/apps/Fluxor/target/core.sock"
-		metaDir = "/var/apps/Fluxor/shares/ui/meta"
-		zashDir = "/var/apps/Fluxor/shares/ui/zash"
-		fluxorConfigFile = "/var/apps/Fluxor/var/fluxor.json"
-		configTarget = "/var/apps/Fluxor/shares/Fluxor/config.yaml"
-		infoLogFile = "/var/apps/Fluxor/shares/Fluxor/info.log"
-		coreWorkDir = "/var/apps/Fluxor/shares/Fluxor"
-	}
-	originalBaseURL = baseURL
 }
 
 func main() {
@@ -144,61 +77,89 @@ func main() {
 	}
 
 	// 设置默认值（根据模式）
-	setDefaults(mode)
+	config.SetDefaults(mode)
 
 	// 环境变量覆盖（所有配置均可通过环境变量修改）
-	if v := os.Getenv("SOCKET_PATH"); v != "" { socketPath = v }
-	if v := os.Getenv("BASE_URL"); v != "" { baseURL = v }
-	if v := os.Getenv("FLUXOR_ADDR"); v != "" { tcpAddr = v }
-	if v := os.Getenv("FLUXOR_PID_FILE"); v != "" { fluxorPidFile = v }
-	if v := os.Getenv("FLUXOR_BIN_DIR"); v != "" { fluxorBinDir = v }
-	if v := os.Getenv("CORE_PID_FILE"); v != "" { corePidFile = v }
-	if v := os.Getenv("CORE_BIN"); v != "" { coreBin = v }
-	if v := os.Getenv("CORE_SOCKET"); v != "" { coreSocket = v }
-	if v := os.Getenv("META_DIR"); v != "" { metaDir = v }
-	if v := os.Getenv("ZASH_DIR"); v != "" { zashDir = v }
-	if v := os.Getenv("FLUXOR_CONFIG_FILE"); v != "" { fluxorConfigFile = v }
-	if v := os.Getenv("CONFIG_TARGET"); v != "" { configTarget = v }
-	if v := os.Getenv("INFO_LOG_FILE"); v != "" { infoLogFile = v }
-	if v := os.Getenv("CORE_WORK_DIR"); v != "" { coreWorkDir = v }
+	if v := os.Getenv("SOCKET_PATH"); v != "" {
+		config.SocketPath = v
+	}
+	if v := os.Getenv("BASE_URL"); v != "" {
+		config.BaseURL = v
+	}
+	if v := os.Getenv("FLUXOR_ADDR"); v != "" {
+		config.TcpAddr = v
+	}
+	if v := os.Getenv("FLUXOR_PID_FILE"); v != "" {
+		config.FluxorPidFile = v
+	}
+	if v := os.Getenv("FLUXOR_BIN_DIR"); v != "" {
+		config.FluxorBinDir = v
+	}
+	if v := os.Getenv("CORE_PID_FILE"); v != "" {
+		config.CorePidFile = v
+	}
+	if v := os.Getenv("CORE_BIN"); v != "" {
+		config.CoreBin = v
+	}
+	if v := os.Getenv("CORE_SOCKET"); v != "" {
+		config.CoreSocket = v
+	}
+	if v := os.Getenv("META_DIR"); v != "" {
+		config.MetaDir = v
+	}
+	if v := os.Getenv("ZASH_DIR"); v != "" {
+		config.ZashDir = v
+	}
+	if v := os.Getenv("FLUXOR_CONFIG_FILE"); v != "" {
+		config.FluxorConfigFile = v
+	}
+	if v := os.Getenv("CONFIG_TARGET"); v != "" {
+		config.ConfigTarget = v
+	}
+	if v := os.Getenv("INFO_LOG_FILE"); v != "" {
+		config.InfoLogFile = v
+	}
+	if v := os.Getenv("CORE_WORK_DIR"); v != "" {
+		config.CoreWorkDir = v
+	}
 
 	// 命令行 -a 覆盖 TCP 地址（最高优先级）
 	if customAddr != "" {
-		tcpAddr = customAddr
+		config.TcpAddr = customAddr
 	}
 
 	// 更新 originalBaseURL（可能被环境变量修改）
-	originalBaseURL = baseURL
+	config.OriginalBaseURL = config.BaseURL
 
 	if mode == "openwrt" {
 		fmt.Printf("Fluxor 运行于 OpenWrt 模式")
 	}
 
 	// === 检查和准备 ===
-	loadSubscribeConfig()
-	initCoreLogger()
-	startAllTimers()
-	loadTproxySrcExceptions()
-	loadTproxyDstExceptions()
-	loadTproxyProxyLocal()
+	config.LoadSubscribeConfig()
+	core.InitCoreLogger()
+	subscription.StartAllTimers()
+	tproxy.LoadTproxySrcExceptions()
+	tproxy.LoadTproxyDstExceptions()
+	tproxy.LoadTproxyProxyLocal()
 
-	if _, err := os.Stat(configTarget); os.IsNotExist(err) {
-		if err := generateConfig(subscribeConfig); err != nil {
+	if _, err := os.Stat(config.ConfigTarget); os.IsNotExist(err) {
+		if err := configgen.GenerateConfig(config.Current); err != nil {
 			fmt.Printf("生成基本配置文件失败: %v\n", err)
 		} else {
 			fmt.Println("已生成基本配置文件 (config.yaml)")
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(fluxorPidFile), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(config.FluxorPidFile), 0755); err != nil {
 		fmt.Printf("无法创建 PID 目录: %v\n", err)
 	} else {
 		pidData := []byte(fmt.Sprintf("%d", os.Getpid()))
-		if err := os.WriteFile(fluxorPidFile, pidData, 0644); err != nil {
+		if err := os.WriteFile(config.FluxorPidFile, pidData, 0644); err != nil {
 			fmt.Printf("写入 PID 文件失败: %v\n", err)
 		} else {
 			defer func() {
-				if err := os.Remove(fluxorPidFile); err != nil {
+				if err := os.Remove(config.FluxorPidFile); err != nil {
 					fmt.Printf("删除 PID 文件失败: %v\n", err)
 				}
 			}()
@@ -206,197 +167,197 @@ func main() {
 	}
 
 	var err error
-	indexTmpl, err = template.ParseFS(staticFS, "index.html")
+	web.IndexTmpl, err = template.ParseFS(staticFS, "index.html")
 	if err != nil {
 		fmt.Printf("加载主页模板失败: %v\n", err)
 		os.Exit(1)
 	}
 
 	// === 检查监听方式 ===
-	if socketPath == "" && tcpAddr == "" {
+	if config.SocketPath == "" && config.TcpAddr == "" {
 		fmt.Println("错误：未配置任何监听地址（SOCKET_PATH 和 FLUXOR_ADDR 均为空）")
 		os.Exit(1)
 	}
 
 	// === 创建 Unix socket 监听器（若启用）===
 	var listener net.Listener
-	if socketPath != "" {
-		if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
+	if config.SocketPath != "" {
+		if err := os.MkdirAll(filepath.Dir(config.SocketPath), 0755); err != nil {
 			fmt.Printf("无法创建 socket 目录: %v\n", err)
 			os.Exit(1)
 		}
-		os.Remove(socketPath)
+		os.Remove(config.SocketPath)
 
-		listener, err = net.Listen("unix", socketPath)
+		listener, err = net.Listen("unix", config.SocketPath)
 		if err != nil {
 			fmt.Printf("监听 Unix socket 失败: %v\n", err)
 			os.Exit(1)
 		}
 		defer listener.Close()
 
-		if err := os.Chmod(socketPath, 0666); err != nil {
+		if err := os.Chmod(config.SocketPath, 0666); err != nil {
 			fmt.Printf("设置 socket 权限失败: %v\n", err)
 		}
-		fmt.Printf("Unix socket 监听: %s\n", socketPath)
+		fmt.Printf("Unix socket 监听: %s\n", config.SocketPath)
 	} else {
 		fmt.Println("Unix socket 已禁用")
 	}
 
 	// === 创建 TCP 监听器（若启用）===
 	var tcpListener net.Listener
-	if tcpAddr != "" {
-		if err := validateTCPAddr(tcpAddr); err != nil {
+	if config.TcpAddr != "" {
+		if err := netinfo.ValidateTCPAddr(config.TcpAddr); err != nil {
 			fmt.Printf("无效的 FLUXOR_ADDR 格式: %v，将禁用 TCP 监听\n", err)
-			tcpAddr = ""
+			config.TcpAddr = ""
 		}
-		if tcpAddr != "" {
-			tcpListener, err = net.Listen("tcp", tcpAddr)
+		if config.TcpAddr != "" {
+			tcpListener, err = net.Listen("tcp", config.TcpAddr)
 			if err != nil {
-				fmt.Printf("无法监听 TCP 地址 %s: %v\n", tcpAddr, err)
+				fmt.Printf("无法监听 TCP 地址 %s: %v\n", config.TcpAddr, err)
 			} else {
 				defer tcpListener.Close()
-				fmt.Printf("TCP 监听: %s\n", tcpAddr)
+				fmt.Printf("TCP 监听: %s\n", config.TcpAddr)
 			}
 		}
 	}
 
-    if baseURL == "/" {
-        baseURL = ""
-    } else {
-        baseURL = strings.TrimSuffix(baseURL, "/")
-    }
+	if config.BaseURL == "/" {
+		config.BaseURL = ""
+	} else {
+		config.BaseURL = strings.TrimSuffix(config.BaseURL, "/")
+	}
 
 	// === 创建路由 ===
 	mux := http.NewServeMux()
 
 	// 外部静态面板
-	mux.Handle(baseURL+"/meta/", http.StripPrefix(baseURL+"/meta/", http.FileServer(http.Dir(metaDir))))
-	mux.Handle(baseURL+"/zash/", http.StripPrefix(baseURL+"/zash/", http.FileServer(http.Dir(zashDir))))
+	mux.Handle(config.BaseURL+"/meta/", http.StripPrefix(config.BaseURL+"/meta/", http.FileServer(http.Dir(config.MetaDir))))
+	mux.Handle(config.BaseURL+"/zash/", http.StripPrefix(config.BaseURL+"/zash/", http.FileServer(http.Dir(config.ZashDir))))
 
 	// 内嵌静态文件（Vue 构建产物 assets/ 目录，直接挂载在 baseURL 下）
-    staticFileServer := http.FileServer(http.FS(staticFS))
-    mux.Handle(baseURL+"/assets/", http.StripPrefix(baseURL, staticFileServer))
-    // 内嵌静态根文件（index.html 之外的静态资源，如 favicon ICON.PNG）
-    mux.Handle(baseURL+"/ICON.PNG", http.StripPrefix(baseURL, staticFileServer))
+	staticFileServer := http.FileServer(http.FS(staticFS))
+	mux.Handle(config.BaseURL+"/assets/", http.StripPrefix(config.BaseURL, staticFileServer))
+	// 内嵌静态根文件（index.html 之外的静态资源，如 favicon ICON.PNG）
+	mux.Handle(config.BaseURL+"/ICON.PNG", http.StripPrefix(config.BaseURL, staticFileServer))
 
 	// 页面路由
-	if baseURL == "" {
-        // 根路径直接渲染首页
-        mux.HandleFunc("/", handleIndex)
-    } else {
-        // 根路径重定向到实际前缀
-        mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-            if r.URL.Path == "/" {
-                redirectTo := baseURL
-                if !strings.HasSuffix(redirectTo, "/") {
-                    redirectTo += "/"
-                }
-                http.Redirect(w, r, redirectTo, http.StatusFound)
-                return
-            }
-            http.NotFound(w, r)
-        })
-        // 实际页面路由
-        mux.HandleFunc(baseURL+"/", handleIndex)
-    }
-	mux.HandleFunc(baseURL+"/whoami", handleWhoAmI)
+	if config.BaseURL == "" {
+		// 根路径直接渲染首页
+		mux.HandleFunc("/", web.HandleIndex)
+	} else {
+		// 根路径重定向到实际前缀
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/" {
+				redirectTo := config.BaseURL
+				if !strings.HasSuffix(redirectTo, "/") {
+					redirectTo += "/"
+				}
+				http.Redirect(w, r, redirectTo, http.StatusFound)
+				return
+			}
+			http.NotFound(w, r)
+		})
+		// 实际页面路由
+		mux.HandleFunc(config.BaseURL+"/", web.HandleIndex)
+	}
+	mux.HandleFunc(config.BaseURL+"/whoami", web.HandleWhoAmI)
 
 	// 内核控制
-	mux.HandleFunc(baseURL+"/core/status", handleCoreStatus)
-	mux.HandleFunc(baseURL+"/core/start", handleCoreStart)
-	mux.HandleFunc(baseURL+"/core/stop", handleCoreStop)
-	mux.HandleFunc(baseURL+"/core/restart", handleCoreRestart)
-	mux.HandleFunc(baseURL+"/upgrade", handleUpgrade)
-	mux.HandleFunc(baseURL+"/core/check-update", handleCoreCheckUpdate)
+	mux.HandleFunc(config.BaseURL+"/core/status", core.HandleCoreStatus)
+	mux.HandleFunc(config.BaseURL+"/core/start", core.HandleCoreStart)
+	mux.HandleFunc(config.BaseURL+"/core/stop", core.HandleCoreStop)
+	mux.HandleFunc(config.BaseURL+"/core/restart", core.HandleCoreRestart)
+	mux.HandleFunc(config.BaseURL+"/upgrade", dashapi.HandleUpgrade)
+	mux.HandleFunc(config.BaseURL+"/core/check-update", appupdate.HandleCoreCheckUpdate)
 
 	// 订阅中心 API
-	mux.HandleFunc(baseURL+"/subscribe/config", handleSubscribeConfigAPI)
-	mux.HandleFunc(baseURL+"/subscribe/generate", handleGenerateConfig)
-	mux.HandleFunc(baseURL+"/subscribe/update/", handleSubscribeUpdate)
-	mux.HandleFunc(baseURL+"/subscribe/update-info/", handleUpdateSubscriptionInfo)
+	mux.HandleFunc(config.BaseURL+"/subscribe/config", subscription.HandleSubscribeConfigAPI)
+	mux.HandleFunc(config.BaseURL+"/subscribe/generate", subscription.HandleGenerateConfig)
+	mux.HandleFunc(config.BaseURL+"/subscribe/update/", subscription.HandleSubscribeUpdate)
+	mux.HandleFunc(config.BaseURL+"/subscribe/update-info/", subscription.HandleUpdateSubscriptionInfo)
 
-    // 获取所有订阅的代理信息（融合模式使用）
-    mux.HandleFunc(baseURL+"/providers/proxies", handleProvidersProxiesAll)
-	mux.HandleFunc(baseURL+"/providers/proxies/", handleProviderProxies)
+	// 获取所有订阅的代理信息（融合模式使用）
+	mux.HandleFunc(config.BaseURL+"/providers/proxies", dashapi.HandleProvidersProxiesAll)
+	mux.HandleFunc(config.BaseURL+"/providers/proxies/", dashapi.HandleProviderProxies)
 
 	// 策略组测速（组内所有节点/子策略组）
-    mux.HandleFunc(baseURL+"/group/", handleGroupDelay)
+	mux.HandleFunc(config.BaseURL+"/group/", dashapi.HandleGroupDelay)
 
 	// WebSocket 代理
-	mux.HandleFunc(baseURL+"/traffic", wsProxyHandler("/traffic"))
-	mux.HandleFunc(baseURL+"/memory", wsProxyHandler("/memory"))
+	mux.HandleFunc(config.BaseURL+"/traffic", wsproxy.WsProxyHandler("/traffic"))
+	mux.HandleFunc(config.BaseURL+"/memory", wsproxy.WsProxyHandler("/memory"))
 
 	// HTTP 代理
-	mux.HandleFunc(baseURL+"/version", handleVersion)
-	mux.HandleFunc(baseURL+"/configs", handleConfigsAPI)
-	mux.HandleFunc(baseURL+"/interfaces", handleInterfaces)
-	mux.HandleFunc(baseURL+"/configs/geo", handleConfigsGeo)
-	mux.HandleFunc(baseURL+"/providers/geo", handleProvidersGeo)
-	mux.HandleFunc(baseURL+"/cache/fakeip/flush", handleFlushFakeIP)
-	mux.HandleFunc(baseURL+"/cache/dns/flush", handleFlushDNS)
-	mux.HandleFunc(baseURL+"/dns/query", handleDNSQuery)
-	mux.HandleFunc(baseURL+"/restart", handleRestart)
-	mux.HandleFunc(baseURL+"/config/tproxy", handleTproxyState)
-	mux.HandleFunc(baseURL+"/config/tproxy/exceptions", handleTproxyExceptions)
-	mux.HandleFunc(baseURL+"/config/tproxy/proxy-local", handleTproxyProxyLocal)
+	mux.HandleFunc(config.BaseURL+"/version", dashapi.HandleVersion)
+	mux.HandleFunc(config.BaseURL+"/configs", dashapi.HandleConfigsAPI)
+	mux.HandleFunc(config.BaseURL+"/interfaces", netinfo.HandleInterfaces)
+	mux.HandleFunc(config.BaseURL+"/configs/geo", dashapi.HandleConfigsGeo)
+	mux.HandleFunc(config.BaseURL+"/providers/geo", dashapi.HandleProvidersGeo)
+	mux.HandleFunc(config.BaseURL+"/cache/fakeip/flush", dashapi.HandleFlushFakeIP)
+	mux.HandleFunc(config.BaseURL+"/cache/dns/flush", dashapi.HandleFlushDNS)
+	mux.HandleFunc(config.BaseURL+"/dns/query", dashapi.HandleDNSQuery)
+	mux.HandleFunc(config.BaseURL+"/restart", dashapi.HandleRestart)
+	mux.HandleFunc(config.BaseURL+"/config/tproxy", tproxy.HandleTproxyState)
+	mux.HandleFunc(config.BaseURL+"/config/tproxy/exceptions", tproxy.HandleTproxyExceptions)
+	mux.HandleFunc(config.BaseURL+"/config/tproxy/proxy-local", tproxy.HandleTproxyProxyLocal)
 
-	mux.HandleFunc(baseURL+"/ipinfo/local/v4", handleLocalIPv4)
-	mux.HandleFunc(baseURL+"/ipinfo/local/v6", handleLocalIPv6)
-	mux.HandleFunc(baseURL+"/ipinfo/proxy/v4", handleProxyIPv4)
-	mux.HandleFunc(baseURL+"/ipinfo/proxy/v6", handleProxyIPv6)
+	mux.HandleFunc(config.BaseURL+"/ipinfo/local/v4", netinfo.HandleLocalIPv4)
+	mux.HandleFunc(config.BaseURL+"/ipinfo/local/v6", netinfo.HandleLocalIPv6)
+	mux.HandleFunc(config.BaseURL+"/ipinfo/proxy/v4", netinfo.HandleProxyIPv4)
+	mux.HandleFunc(config.BaseURL+"/ipinfo/proxy/v6", netinfo.HandleProxyIPv6)
 
-	mux.HandleFunc(baseURL+"/delaytest/google", handleDelayTestGoogle)
-	mux.HandleFunc(baseURL+"/delaytest/youtube", handleDelayTestYouTube)
-	mux.HandleFunc(baseURL+"/delaytest/github", handleDelayTestGitHub)
-	mux.HandleFunc(baseURL+"/delaytest/baidu", handleDelayTestBaidu)
-	mux.HandleFunc(baseURL+"/delaytest/bilibili", handleDelayTestBilibili)
-	mux.HandleFunc(baseURL+"/delaytest/custom", handleDelayTestCustom)
+	mux.HandleFunc(config.BaseURL+"/delaytest/google", delaytest.HandleDelayTestGoogle)
+	mux.HandleFunc(config.BaseURL+"/delaytest/youtube", delaytest.HandleDelayTestYouTube)
+	mux.HandleFunc(config.BaseURL+"/delaytest/github", delaytest.HandleDelayTestGitHub)
+	mux.HandleFunc(config.BaseURL+"/delaytest/baidu", delaytest.HandleDelayTestBaidu)
+	mux.HandleFunc(config.BaseURL+"/delaytest/bilibili", delaytest.HandleDelayTestBilibili)
+	mux.HandleFunc(config.BaseURL+"/delaytest/custom", delaytest.HandleDelayTestCustom)
 
 	// 代理 API
-	mux.HandleFunc(baseURL+"/proxies", handleProxies)
-	mux.HandleFunc(baseURL+"/proxies/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(config.BaseURL+"/proxies", dashapi.HandleProxies)
+	mux.HandleFunc(config.BaseURL+"/proxies/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/delay") || strings.Contains(r.URL.Path, "/delay?") {
-			handleProxyDelay(w, r)
+			dashapi.HandleProxyDelay(w, r)
 		} else {
-			handleProxySwitch(w, r)
+			dashapi.HandleProxySwitch(w, r)
 		}
 	})
 
 	// fluxor 版本更新
-	mux.HandleFunc(baseURL+"/check-update", handleCheckUpdate)
-	mux.HandleFunc(baseURL+"/update-self", handleSelfUpdate)
+	mux.HandleFunc(config.BaseURL+"/check-update", appupdate.HandleCheckUpdate)
+	mux.HandleFunc(config.BaseURL+"/update-self", appupdate.HandleSelfUpdate)
 
 	// 质量分数
-	mux.HandleFunc(baseURL+"/proxies/quality", handleQualityScores)
+	mux.HandleFunc(config.BaseURL+"/proxies/quality", quality.HandleQualityScores)
 
 	// 日志 WebSocket
-	mux.HandleFunc(baseURL+"/logs", wsProxyHandler("/logs"))
+	mux.HandleFunc(config.BaseURL+"/logs", wsproxy.WsProxyHandler("/logs"))
 
 	// 规则 API
-	mux.HandleFunc(baseURL+"/rules", handleRules)
-	mux.HandleFunc(baseURL+"/rules/disable", handleRulesDisable)
-	mux.HandleFunc(baseURL+"/providers/rules", handleRuleProviders)
-	mux.HandleFunc(baseURL+"/providers/rules/", handleUpdateRuleProvider)
+	mux.HandleFunc(config.BaseURL+"/rules", dashapi.HandleRules)
+	mux.HandleFunc(config.BaseURL+"/rules/disable", dashapi.HandleRulesDisable)
+	mux.HandleFunc(config.BaseURL+"/providers/rules", dashapi.HandleRuleProviders)
+	mux.HandleFunc(config.BaseURL+"/providers/rules/", dashapi.HandleUpdateRuleProvider)
 
 	// 连接管理
-	mux.HandleFunc(baseURL+"/connections", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(config.BaseURL+"/connections", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
-			handleConnectionsClose(w, r)
+			dashapi.HandleConnectionsClose(w, r)
 		} else {
-			wsProxyHandler("/connections")(w, r)
+			wsproxy.WsProxyHandler("/connections")(w, r)
 		}
 	})
-	mux.HandleFunc(baseURL+"/connections/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(config.BaseURL+"/connections/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
-			handleConnectionsClose(w, r)
+			dashapi.HandleConnectionsClose(w, r)
 		} else {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		}
 	})
 
 	// 自动启动内核
-	if !isCoreRunning() {
-		if err := startCore(); err != nil {
+	if !core.IsCoreRunning() {
+		if err := core.StartCore(); err != nil {
 			fmt.Printf("自动启动内核失败: %v\n", err)
 		}
 	} else {
@@ -414,7 +375,7 @@ func main() {
 	}
 	if tcpListener != nil {
 		go func() {
-			fmt.Printf("Fluxor TCP 服务已启动，监听: %s\n", tcpAddr)
+			fmt.Printf("Fluxor TCP 服务已启动，监听: %s\n", config.TcpAddr)
 			if err := http.Serve(tcpListener, mux); err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
 				fmt.Printf("TCP HTTP 服务错误: %v\n", err)
 			}
@@ -427,84 +388,14 @@ func main() {
 	<-quit
 
 	fmt.Printf("收到退出信号，正在关闭 Fluxor...\n")
-	stopAllTimers()
-	disableTProxyRules()
-	if isCoreRunning() {
-		if err := stopCore(); err != nil {
+	subscription.StopAllTimers()
+	tproxy.DisableTProxyRules()
+	if core.IsCoreRunning() {
+		if err := core.StopCore(); err != nil {
 			fmt.Printf("停止内核失败: %v\n", err)
 		}
 	} else {
 		fmt.Printf("内核未运行，无需停止\n")
 	}
 	fmt.Printf("Fluxor 已安全退出\n")
-}
-
-// wsProxyHandler 保持不变
-func wsProxyHandler(targetPath string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			log.Printf("[WS] 升级失败 (路径 %s): %v", targetPath, err)
-			return
-		}
-		defer conn.Close()
-
-		subscribeMu.RLock()
-		secret := subscribeConfig.PanelSecret
-		subscribeMu.RUnlock()
-
-		dialer := &websocket.Dialer{
-			NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return net.Dial("unix", coreSocket)
-			},
-			ReadBufferSize:  1024,
-			WriteBufferSize: 1024,
-		}
-		header := http.Header{}
-		if secret != "" {
-			header.Set("Authorization", "Bearer "+secret)
-		}
-		path := targetPath
-		if r.URL.RawQuery != "" {
-			path += "?" + r.URL.RawQuery
-		}
-		coreConn, _, err := dialer.Dial("ws://localhost"+path, header)
-		if err != nil {
-			// 内核未运行或连接失败是预期情况，不记录日志
-			return
-		}
-		defer coreConn.Close()
-
-		errChan := make(chan error, 2)
-
-		go func() {
-			for {
-				msgType, msg, err := coreConn.ReadMessage()
-				if err != nil {
-					errChan <- err
-					return
-				}
-				if err := conn.WriteMessage(msgType, msg); err != nil {
-					errChan <- err
-					return
-				}
-			}
-		}()
-
-		go func() {
-			for {
-				msgType, msg, err := conn.ReadMessage()
-				if err != nil {
-					errChan <- err
-					return
-				}
-				if err := coreConn.WriteMessage(msgType, msg); err != nil {
-					errChan <- err
-					return
-				}
-			}
-		}()
-
-		<-errChan
-	}
 }
