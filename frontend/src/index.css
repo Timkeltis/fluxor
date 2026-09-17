@@ -1011,14 +1011,24 @@ aside {
   transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1), color 0.3s ease !important;
 }
 
-/* 常驻硬件加速以防 hover translate 时抗锯齿重算导致文字发虚 */
+/* 常驻硬件加速以防 hover translate 时抗锯齿重算导致文字发虚。
+
+   必须用 translateZ(0)，不要写 translate3d(0,0,0)：
+   Vite 8 用 lightningcss 压缩 CSS，它会把 translate3d(0,0,0) 规范化成 translate(0,0)。
+   两者视觉等价，但 translate(0,0) 是 2D 变换，不再触发 GPU 合成层提升——于是这条
+   「防发虚」声明被静默地变成了空操作，表现为修复过一段时间后毛病又复现。
+   translateZ(0) 属 3D 变换、无法折叠成 2D，压缩后可原样保留。
+   （实测 lightningcss 1.33：translate3d(0,0,0) → translate(0,0)；translateZ(0) 不动。）
+
+   同时不再写 -webkit-transform：同一规则内标准属性与其前缀会被判为等价声明，
+   压缩时只保留后写的一条，反而可能把标准属性丢掉（详见上方磨砂玻璃处的同类说明）。 */
 .live-card {
-  transform: translate3d(0, 0, 0);
-  -webkit-transform: translate3d(0, 0, 0);
+  transform: translateZ(0);
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
   transform-style: preserve-3d;
   -webkit-transform-style: preserve-3d;
+  will-change: transform;
   --live-lift: 3px;
 }
 
