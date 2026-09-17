@@ -342,8 +342,10 @@ export const useOverviewStore = defineStore('overview', () => {
     }
   }
 
+  const MAX_POINTS = 65
+
   // 将数据压入历史队列（最长为65个点）
-  const pushHistory = (up: number, down: number, maxPoints = 65) => {
+  const pushHistory = (up: number, down: number, maxPoints = MAX_POINTS) => {
     uploadHistory.value.push(up)
     downloadHistory.value.push(down)
     
@@ -356,6 +358,27 @@ export const useOverviewStore = defineStore('overview', () => {
     if (timeHistory.value.length > maxPoints) timeHistory.value.shift()
   }
 
+  // 以零值预填满整个窗口，使首屏即为完整骨架（曲线贴基线开始向右延伸），
+  // 而非先留白、再从右缘把整条曲线「长」出来。时刻表按 1s 间隔回推，保证时间轴连续可读。
+  const primeHistory = (maxPoints = MAX_POINTS) => {
+    if (uploadHistory.value.length > 0) return
+    const now = Date.now()
+    const ups: number[] = []
+    const downs: number[] = []
+    const times: string[] = []
+    for (let i = maxPoints - 1; i >= 0; i--) {
+      const d = new Date(now - i * 1000)
+      ups.push(0)
+      downs.push(0)
+      times.push(
+        `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+      )
+    }
+    uploadHistory.value = ups
+    downloadHistory.value = downs
+    timeHistory.value = times
+  }
+
   return {
     stats,
     uploadHistory,
@@ -365,6 +388,7 @@ export const useOverviewStore = defineStore('overview', () => {
     isTrafficConnected,
     isMemoryConnected,
     pushHistory,
+    primeHistory,
     subscribeTraffic,
     unsubscribeTraffic,
     subscribeMemory,

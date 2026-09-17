@@ -43,7 +43,59 @@ const base = window.BASE_URL || ''
 
 // 流量数据点 (最多65个)
 const maxPoints = 65
-let cachedMaxY = 1024
+
+// === 绘图区布局（CSS px）===
+// 左侧独立 gutter 安置 Y 轴刻度，刻度不再压在数据区上；底部轴区安置时间刻度。
+const CHART_H = 200
+const GUTTER_L = 52
+const PAD_T = 10
+const AXIS_B = 22
+
+interface ChartBox {
+  plotL: number
+  plotR: number
+  plotT: number
+  plotB: number
+  plotW: number
+  plotH: number
+  stepX: number
+}
+
+const chartBox = (w: number): ChartBox => {
+  const plotL = GUTTER_L
+  const plotR = w - 8
+  const plotT = PAD_T
+  const plotB = CHART_H - AXIS_B
+  const plotW = plotR - plotL
+  return { plotL, plotR, plotT, plotB, plotW, plotH: plotB - plotT, stepX: plotW / (maxPoints - 1) }
+}
+
+// 序列 → 画布 x 坐标的唯一映射（绘制与命中测试共用，禁止各算一套）。
+// 右对齐流式：最新点恒贴 plotR，历史向左延伸。窗口被 primeHistory 填满时
+// 该式恒等于 plotL + idx * stepX；仅当历史不足（未预填/被清空）时才在右侧紧凑排列，
+// 从而永不出现「曲线与右缘脱开」的悬空图形。
+const seriesOffsetX = (box: ChartBox, totalLen: number): number =>
+  box.plotR - (Math.max(totalLen, 1) - 1) * box.stepX
+
+// 1px 细线对齐到物理像素网格：落在整数坐标上的 1px 线会跨两个物理行渲染成 2px 灰边，
+// 轴线尤其明显。先吸附到设备像素中心再回缩放空间，保证在任意 dpr 下都是单一实线。
+const crisp = (v: number): number => (Math.round(v * dpr) + 0.5) / dpr
+
+// Y 量程：固定在 1024 进制阶梯上取值，避免出现 "1.95 KB" 这类刻度文本。
+const SCALE_LADDER = (() => {
+  const out = [1024]
+  for (let p = 1; p <= 4; p++) {
+    for (const m of [1, 2, 5, 10, 20, 50, 100, 200, 500]) out.push(m * Math.pow(1024, p))
+  }
+  return out
+})()
+let scaleMax = 1024
+let shrinkStreak = 0
+
+const niceMax = (v: number): number => {
+  const t = Math.max(v, 1024)
+  return SCALE_LADDER.find(n => n >= t) ?? SCALE_LADDER[SCALE_LADDER.length - 1]
+}
 
 // Canvas 引用与上下文
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -91,60 +143,101 @@ const getChartColors = () => {
   }
 }
 
-// 绘制贝塞尔曲线与面积填充
+// 单调三次（Fritsch–Carlson）插值：保形且保峰值。
+// 原实现用 quadraticCurveTo 的中点法，下一段曲线以「上一段的中点」为当前点，
+// 曲线因此永远画不到数据点本身。实测（64 段采样）：
+//   单帧峰值 1MB→渲染 750KB（-25%）、陡升陡降 2MB→1.5MB（-25%）、锯齿 -25%；
+//   连续两帧以上的峰值才无损。
+// 而单帧突发正是流量曲线的常态形状，等于系统性抹掉了每个毛刺的高度。
+// 单调插值对上述场景均 100% 保峰值，且极值点切线归零，不过冲越界。
+const monotoneTangents = (points: { x: number; y: number }[]): number[] => {
+  const n = points.length
+  const m = new Array<number>(n).fill(0)
+  if (n < 2) return m
+
+  const dx: number[] = []
+  const dy: number[] = []
+  const slope: number[] = []
+  for (let i = 0; i < n - 1; i++) {
+    dx.push(points[i + 1].x - points[i].x)
+    dy.push(points[i + 1].y - points[i].y)
+    slope.push(dx[i] === 0 ? 0 : dy[i] / dx[i])
+  }
+
+  m[0] = slope[0]
+  m[n - 1] = slope[n - 2]
+  for (let i = 1; i < n - 1; i++) {
+    if (slope[i - 1] * slope[i] <= 0) {
+      m[i] = 0 // 极值点处切线归零，杜绝过冲
+    } else {
+      const w1 = 2 * dx[i] + dx[i - 1]
+      const w2 = dx[i] + 2 * dx[i - 1]
+      m[i] = (w1 + w2) / (w1 / slope[i - 1] + w2 / slope[i])
+    }
+  }
+  return m
+}
+
+const tracePath = (points: { x: number; y: number }[]) => {
+  if (!ctx) return false
+  const n = points.length
+  if (n < 2) return false
+  const m = monotoneTangents(points)
+
+  ctx.beginPath()
+  ctx.moveTo(points[0].x, points[0].y)
+  for (let i = 0; i < n - 1; i++) {
+    const h = points[i + 1].x - points[i].x
+    ctx.bezierCurveTo(
+      points[i].x + h / 3, points[i].y + (m[i] * h) / 3,
+      points[i + 1].x - h / 3, points[i + 1].y - (m[i + 1] * h) / 3,
+      points[i + 1].x, points[i + 1].y
+    )
+  }
+  return true
+}
+
+// 绘制曲线与面积填充（基线为 plotB，面积自曲线垂落到基线）
 const drawSmoothArea = (
   data: number[],
   strokeColor: string,
   topGradientColor: string,
   bottomGradientColor: string,
-  offsetX: number,
-  stepX: number,
-  h: number,
-  chartH: number
+  box: ChartBox
 ) => {
-  if (data.length < 2) return
-  if (!ctx) return
+  if (data.length < 2 || !ctx) return
+  const { plotB, plotH, stepX } = box
+  const offsetX = seriesOffsetX(box, data.length)
+
+  const points = data.map((val, idx) => ({
+    x: offsetX + idx * stepX,
+    y: plotB - (Math.min(val, scaleMax) / scaleMax) * plotH
+  }))
 
   ctx.save()
 
-  // 构造曲线数据点数组
-  const points = data.map((val, idx) => ({
-    x: offsetX + idx * stepX,
-    y: h - 25 - (val / cachedMaxY) * chartH
-  }))
-
-  // 1. 绘制面积填充
-  ctx.beginPath()
-  ctx.moveTo(points[0].x, h - 25)
-  ctx.lineTo(points[0].x, points[0].y)
-
-  for (let i = 0; i < points.length - 1; i++) {
-    const xc = (points[i].x + points[i + 1].x) / 2
-    const yc = (points[i].y + points[i + 1].y) / 2
-    ctx.quadraticCurveTo(points[i].x, points[i].y, xc, yc)
+  // 1. 面积填充
+  if (!tracePath(points)) {
+    ctx.restore()
+    return
   }
-  ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y)
-  ctx.lineTo(points[points.length - 1].x, h - 25)
+  ctx.lineTo(points[points.length - 1].x, plotB)
+  ctx.lineTo(points[0].x, plotB)
   ctx.closePath()
 
-  const grad = ctx.createLinearGradient(0, h - 25 - chartH, 0, h - 25)
+  const grad = ctx.createLinearGradient(0, box.plotT, 0, plotB)
   grad.addColorStop(0, topGradientColor)
   grad.addColorStop(1, bottomGradientColor)
   ctx.fillStyle = grad
   ctx.fill()
 
-  // 2. 绘制描边曲线
-  ctx.beginPath()
-  ctx.moveTo(points[0].x, points[0].y)
-  for (let i = 0; i < points.length - 1; i++) {
-    const xc = (points[i].x + points[i + 1].x) / 2
-    const yc = (points[i].y + points[i + 1].y) / 2
-    ctx.quadraticCurveTo(points[i].x, points[i].y, xc, yc)
+  // 2. 描边
+  if (tracePath(points)) {
+    ctx.strokeStyle = strokeColor
+    ctx.lineWidth = 1.75
+    ctx.lineJoin = 'round'
+    ctx.stroke()
   }
-  ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y)
-  ctx.strokeStyle = strokeColor
-  ctx.lineWidth = 1.75
-  ctx.stroke()
 
   ctx.restore()
 }
@@ -161,80 +254,119 @@ const drawChart = () => {
   ctx.scale(dpr, dpr)
 
   const totalLen = uploadHistory.value.length
-  if (totalLen < 2 && downloadHistory.value.length < 2) {
+  if (totalLen < 2) {
     ctx.restore()
     return
   }
 
-  // 动态计算 Y 轴最大值
-  let currentMax = 1024
-  uploadHistory.value.forEach(v => { if (v > currentMax) currentMax = v })
-  downloadHistory.value.forEach(v => { if (v > currentMax) currentMax = v })
-  cachedMaxY = Math.max(currentMax, cachedMaxY * 0.95)
-
-  const stepX = w / (maxPoints - 1)
   const colors = getChartColors()
+  const box = chartBox(w)
+  const { plotL, plotR, plotT, plotB, plotH, stepX } = box
 
-  // 底部预留 25px 给 X 轴刻度，上部留 10px 缓冲，图表真实高度
-  const chartH = h - 35
-  const offsetX = (maxPoints - totalLen) * stepX
-
-  // 1. 绘制网格线与 Y 轴刻度（半透明精致虚线）
+  // 1. 网格线（降权为极浅虚线；基线不在此处，由第 2 步单独绘制）
   ctx.save()
   ctx.strokeStyle = colors.grid
-  ctx.globalAlpha = 0.3
+  ctx.globalAlpha = 0.16
   ctx.lineWidth = 1
   ctx.setLineDash([4, 4])
-  ctx.font = '10px monospace'
-  ctx.textAlign = 'right'
-  ctx.fillStyle = colors.text
-
-  for (let i = 0; i <= 4; i++) {
-    const y = 10 + (i / 4) * chartH
+  for (let i = 0; i < 4; i++) {
+    const y = crisp(plotT + (i / 4) * plotH)
     ctx.beginPath()
-    ctx.moveTo(0, y)
-    ctx.lineTo(w - 5, y)
+    ctx.moveTo(plotL, y)
+    ctx.lineTo(plotR, y)
     ctx.stroke()
-
-    // 绘制坐标刻度文本（恢复不透明度并使用实线）
-    ctx.save()
-    ctx.globalAlpha = 1.0
-    ctx.setLineDash([])
-    ctx.fillText(formatBytes(cachedMaxY * (1 - i / 4)), w - 8, y - 3)
-    ctx.restore()
   }
   ctx.restore()
 
-  // 2. 绘制平滑渐变曲线
-  drawSmoothArea(uploadHistory.value, '#3b82f6', 'rgba(59, 130, 246, 0.18)', 'rgba(59, 130, 246, 0.0)', offsetX, stepX, h, chartH)
-  drawSmoothArea(downloadHistory.value, '#10b981', 'rgba(16, 185, 129, 0.18)', 'rgba(16, 185, 129, 0.0)', offsetX, stepX, h, chartH)
+  // 2. 基线（零线）：唯一的一条实线重线，从左侧 gutter 画到右缘，与 Y 轴竖线
+  //    正交构成完整坐标基准。必须画在曲线之前：面积渐变在底端 alpha 已为 0，
+  //    不会遮挡它；反之若画在之后，会把贴零的曲线整段吃掉。
+  ctx.save()
+  ctx.strokeStyle = colors.grid
+  ctx.globalAlpha = 0.85
+  ctx.lineWidth = 1
+  ctx.setLineDash([])
+  const baseY = crisp(plotB)
+  ctx.beginPath()
+  ctx.moveTo(crisp(plotL), baseY)
+  ctx.lineTo(crisp(plotR), baseY)
+  ctx.stroke()
+  ctx.restore()
 
-  // 3. 绘制 X 轴动态时间刻度（相对时间）
+  // 3. 曲线与面积
+  //    注：y 由 clamp 后的数值算出，恒落在 [plotT, plotB] 内（单调插值在值域上不过冲），
+  //    x 恒落在 [plotL, plotR] 内，因此并不存在越界溢出。此处 clip 只是防御性兜底：
+  //    按描边半宽（0.875px）外扩，保证任何情况下都不会裁掉线宽本身。
+  ctx.save()
+  ctx.beginPath()
+  const bleed = 0.875
+  ctx.rect(plotL - bleed, plotT - bleed, plotR - plotL + bleed * 2, plotB - plotT + bleed * 2)
+  ctx.clip()
+  drawSmoothArea(uploadHistory.value, '#3b82f6', 'rgba(59, 130, 246, 0.18)', 'rgba(59, 130, 246, 0.0)', box)
+  drawSmoothArea(downloadHistory.value, '#10b981', 'rgba(16, 185, 129, 0.18)', 'rgba(16, 185, 129, 0.0)', box)
+  ctx.restore()
+
+  // 4. Y 轴刻度：画在 gutter 内，右对齐，不叠数据；刻度值落在 1024 阶梯上
+  ctx.save()
   ctx.font = '10px monospace'
   ctx.fillStyle = colors.text
-  ctx.textAlign = 'center'
+  ctx.textAlign = 'right'
+  ctx.textBaseline = 'middle'
+  for (let i = 0; i <= 4; i++) {
+    const y = plotT + (i / 4) * plotH
+    // 顶端/底端刻度内缩，避免贴边被裁
+    const ty = i === 0 ? y + 5 : i === 4 ? y - 5 : y
+    ctx.fillText(formatBytes(scaleMax * (1 - i / 4)), plotL - 8, ty)
+  }
+  // Y 轴竖线，让曲线有明确的左边界
+  ctx.globalAlpha = 0.35
+  ctx.strokeStyle = colors.grid
+  ctx.setLineDash([])
+  ctx.beginPath()
+  ctx.moveTo(crisp(plotL), plotT)
+  ctx.lineTo(crisp(plotL), plotB)
+  ctx.stroke()
+  ctx.restore()
 
-  const timeLabels = [60, 45, 30, 15, 0]
-  const lastIdx = totalLen - 1
-  for (const sec of timeLabels) {
-    const idx = lastIdx - sec
-    if (idx >= 0 && idx < totalLen) {
-      const x = offsetX + idx * stepX
-      ctx.fillText(sec + 's', x, h - 6)
+  // 5. X 轴时间刻度：真实时钟（HH:MM:SS），位置由「窗口内第几个点」决定，
+  //    与数据量无关，因而永不漂移；窗口固定为 maxPoints 时恒等于左缘起点。
+  ctx.save()
+  ctx.font = '10px monospace'
+  ctx.fillStyle = colors.text
+  ctx.textBaseline = 'alphabetic'
+  const offsetX = seriesOffsetX(box, totalLen)
+  const tickCount = Math.max(2, Math.min(5, Math.round(box.plotW / 110)))
+  for (let i = 0; i < tickCount; i++) {
+    const t = i / (tickCount - 1)
+    const idx = Math.round(t * (maxPoints - 1))
+    if (idx >= totalLen) continue // 窗口未填满时不画到空白区
+    const label = timeHistory.value[idx] || ''
+    if (!label) continue
+    const x = offsetX + idx * stepX
+    // 首末标签分别左/右对齐，避免出界
+    if (i === 0) {
+      ctx.textAlign = 'left'
+      ctx.fillText(label, plotL, h - 6)
+    } else if (i === tickCount - 1) {
+      ctx.textAlign = 'right'
+      ctx.fillText(label, plotR, h - 6)
+    } else {
+      ctx.textAlign = 'center'
+      ctx.fillText(label, x, h - 6)
     }
   }
+  ctx.restore()
 
-  // 4. 绘制悬浮指示器
+  // 6. 悬浮指示器（与曲线共用 offsetX，保证指示线精确落在被高亮的数据点上）
   if (hoverIndex.value !== null && hoverIndex.value < totalLen) {
-    const idx = hoverIndex.value
-    const x = offsetX + idx * stepX
-
+    const x = crisp(offsetX + hoverIndex.value * stepX)
     ctx.save()
     ctx.strokeStyle = colors.grid
+    ctx.globalAlpha = 0.6
     ctx.lineWidth = 1
     ctx.beginPath()
-    ctx.moveTo(x, 10)
-    ctx.lineTo(x, h - 25)
+    ctx.moveTo(x, plotT)
+    ctx.lineTo(x, plotB)
     ctx.stroke()
     ctx.restore()
   }
@@ -242,30 +374,31 @@ const drawChart = () => {
   ctx.restore()
 }
 
-// 交互事件处理
+// 交互事件处理（与 drawChart 复用同一套坐标映射，量程不再随鼠标移动变化）
 const updateHoverState = (x: number, y: number) => {
   if (!canvasRef.value || uploadHistory.value.length === 0) return
   const canvas = canvasRef.value
   const w = canvas.width / dpr
-  const h = canvas.height / dpr
 
-  const chartH = h - 35
-  const stepX = w / (maxPoints - 1)
-  const offsetX = (maxPoints - uploadHistory.value.length) * stepX
+  const box = chartBox(w)
+  const { plotB, plotH, stepX, plotR } = box
+  const totalLen = uploadHistory.value.length
+  const offsetX = seriesOffsetX(box, totalLen)
 
   const rawIdx = Math.round((x - offsetX) / stepX)
-  const idx = Math.max(0, Math.min(uploadHistory.value.length - 1, rawIdx))
+  const idx = Math.max(0, Math.min(totalLen - 1, rawIdx))
 
   const pointX = offsetX + idx * stepX
-  if (Math.abs(x - pointX) < stepX * 1.5) {
+  // 命中范围以曲线实际占据的区间为准（右对齐流式下右侧可能是空白区）
+  if (x >= offsetX - stepX / 2 && x <= plotR + stepX / 2) {
     hoverIndex.value = idx
     tooltip.value.show = true
     tooltip.value.x = pointX
 
     const upVal = uploadHistory.value[idx] || 0
     const downVal = downloadHistory.value[idx] || 0
-    const upY = h - 25 - (upVal / cachedMaxY) * chartH
-    const downY = h - 25 - (downVal / cachedMaxY) * chartH
+    const upY = plotB - (Math.min(upVal, scaleMax) / scaleMax) * plotH
+    const downY = plotB - (Math.min(downVal, scaleMax) / scaleMax) * plotH
     tooltip.value.y = Math.min(upY, downY) - 12
 
     tooltip.value.time = timeHistory.value[idx] || ''
@@ -297,8 +430,34 @@ const handleMouseLeave = () => {
   drawChart()
 }
 
+// 量程更新与重绘解耦：仅在数据点入队时评估，避免鼠标移动（高频调用 drawChart）
+// 反复触发缩容导致 Y 轴量程抖动。
+// 扩容立即生效；缩容需峰值连续 30 个点低于量程一半，才回落到匹配档位。
+const updateScale = () => {
+  let peak = 0
+  for (const v of uploadHistory.value) if (v > peak) peak = v
+  for (const v of downloadHistory.value) if (v > peak) peak = v
+
+  const next = niceMax(peak)
+  if (next > scaleMax) {
+    scaleMax = next
+    shrinkStreak = 0
+    return
+  }
+  if (peak < scaleMax * 0.5) {
+    shrinkStreak++
+    if (shrinkStreak >= 30) {
+      scaleMax = niceMax(peak * 1.2)
+      shrinkStreak = 0
+    }
+  } else {
+    shrinkStreak = 0
+  }
+}
+
 // 监听历史队列自动重绘
 watch(uploadHistory, () => {
+  updateScale()
   drawChart()
 }, { deep: true })
 
@@ -327,7 +486,7 @@ const initCanvas = () => {
     if (!parent) return
     const w = parent.clientWidth
     if (w === 0) return
-    const h = 200
+    const h = CHART_H
     canvas.style.width = w + 'px'
     canvas.style.height = h + 'px'
     canvas.width = w * dpr
@@ -686,6 +845,9 @@ watch(
 onMounted(() => {
   nextTick(() => {
     fetchSubscribeConfig()
+    // 先以 0 预填满窗口，再初始化画布：首屏即为固定骨架 + 可见基线，
+    // 曲线自左向右延伸，而不是等数据攒够后从右缘「长」出来。
+    overviewStore.primeHistory(maxPoints)
     initCanvas()
     observeTheme()
     overviewStore.subscribeStatus()
