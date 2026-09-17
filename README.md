@@ -58,78 +58,39 @@ make
 ### 常用命令
 
 ```bash
-make help       # 查看全部可用目标
-
-make            # 完整构建，输出 ./fluxor
-make frontend   # 仅构建前端 → frontend/dist
-make sync       # 仅同步 frontend/dist → backend/dist
-make backend    # 同步并编译后端 → ./fluxor
-make deps       # 仅安装前端依赖
-make run        # 以前台方式运行后端（自动确保 dist 已同步）
-make dev        # 启动前端热更新开发服务器
-make fmt        # 格式化后端 Go 代码
-make vet        # 后端静态检查
-make check      # gofmt 校验 + go vet + 编译（CI 友好）
-make clean      # 清理构建产物
+make            # 清理旧 dist → 构建前端 → 同步 → 编译后端，输出 ./fluxor
+make V=1.0.0    # 同上，并把版本号 1.0.0 注入二进制
+make clean      # 清理构建产物（frontend/dist、backend/dist、./fluxor）
 ```
+
+`make` 每次都会先清除旧的 `frontend/dist` 与 `backend/dist` 再重新构建，避免残留旧产物。
 
 ### 构建变量
 
-可在命令行覆盖，例如 `make backend GOOS=linux GOARCH=arm64 BIN=fluxor-arm64`：
-
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `GOOS` / `GOARCH` | 跟随本机 | Go 交叉编译目标 |
-| `GOFLAGS` | `-ldflags="-s -w"` | Go 构建附加参数 |
-| `BIN` | `fluxor` | 输出二进制路径 |
+| `V` | `dev` | 注入二进制的版本号（`-ldflags -X`） |
+| `BIN` | `fluxor` | 输出二进制名称 |
 | `GO` / `NPM` | `go` / `npm` | 工具链命令 |
-| `NPM_INSTALL` | `npm install` | 依赖安装命令；CI 可设为 `npm ci` |
 
-> 切换 `GOOS`/`GOARCH` 时会自动重新编译，不会复用其他架构的旧二进制。
-
-### 构建流程与增量
-
-```
-deps ──> frontend ──> sync ──> backend
-npm install   npm run build   cp -r   go build
-```
-
-各阶段通过产物目录内的戳记文件判断是否需要重跑，因此重复执行 `make` 会跳过已完成的阶段：
-
-| 戳记 | 触发条件 |
-|------|----------|
-| `frontend/node_modules/.fluxor-install-stamp` | `package.json` / `package-lock.json` 变更 |
-| `frontend/dist/.fluxor-build-stamp` | `frontend/src`、`index.html`、`vite.config.*`、`tsconfig*.json` 变更 |
-| `backend/dist/.fluxor-sync-stamp` | `frontend/dist` 更新 |
-| `.fluxor.target` | `GOOS`/`GOARCH` 变更（触发重新编译） |
-
-删除对应产物目录（或执行 `make clean`）即会自动触发重建。
-
----
-
-## 本地开发
-
-### 前端热更新
+交叉编译直接交给 Go，设置 `GOOS` / `GOARCH` 环境变量即可：
 
 ```bash
-make deps      # 安装依赖
-make dev       # 启动 Vite 开发服务器
+make GOOS=linux GOARCH=arm64
 ```
 
-前端内置离线 Mock 模拟器（`frontend/src/utils/mock.ts`），可脱离 Go 后端独立联调，仅在 Vite 开发模式（`import.meta.env.DEV`）下生效，生产构建中会被整体摇树移除。控制台可通过 `localStorage.setItem('MOCK_BACKEND', 'true'|'false')` 强制开关。
+### 版本号
 
-### 后端开发
+版本号在**编译期由后端注入**（不再是前端 `package.json`）：
 
 ```bash
-make sync          # 确保 backend/dist 存在（//go:embed 需要）
-make run           # 前台运行后端
+make V=1.2.3
 ```
 
-修改前端代码后需重新执行 `make`（或 `make sync`）以刷新内嵌产物，因为前端资源是**编译期内嵌**的。
+注入值写入 `internal/buildinfo.Version`，前端「关于」页与更新检查改为经后端接口
+`GET /app-version` 获取，`/check-update`、`/update-self` 也不再需要前端传 `?current=`。
 
-### 跨平台构建
-
-Linux / macOS 直接使用 `make`。Windows 下可使用 `build_linux.cmd`，它以相同流程完成前端构建、dist 同步与 Linux amd64 交叉编译。
+未指定 `V` 时注入 `dev`；此时后端会判定「版本未知」，更新检查不会误报有新版本。
 
 ---
 
@@ -177,8 +138,7 @@ fluxor/
 │   ├── main.go       #   入口：参数解析、路由注册、监听、优雅退出、go:embed
 │   └── internal/     #   按功能域拆分的实现（config/core/tproxy/subscription/…）
 ├── frontend/         # Vue 3 + Vite 前端源码，构建产物内嵌进后端
-├── docs/             # VitePress 文档站
-└── build_linux.cmd   # Windows 下的 Linux amd64 构建脚本
+└── docs/             # VitePress 文档站
 ```
 
 ---

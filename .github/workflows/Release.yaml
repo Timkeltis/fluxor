@@ -1,7 +1,14 @@
 name: Build and Release fluxor
 
+# 手动触发时可输入版本号；留空则回退为 git describe。
+# 版本号经 -ldflags 注入 buildinfo.Version（不再由前端 package.json 提供）。
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 1.0.0）。留空则使用 git describe --tags --always'
+        required: false
+        default: ''
 
 jobs:
   build:
@@ -16,6 +23,8 @@ jobs:
     steps:
       - name: 检出源码
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: 设置 Node.js 环境
         uses: actions/setup-node@v7
@@ -29,30 +38,21 @@ jobs:
         with:
           go-version: '1.27'
 
-      - name: 修改 package.json 版本号（追加 commit 哈希）
+      - name: 确定版本号
+        id: version
         run: |
-          HASH=$(git rev-parse --short HEAD)
-          VERSION=$(jq -r '.version' frontend/package.json)
-          NEW_VERSION="${VERSION}~${HASH}"
-          jq --arg new "$NEW_VERSION" '.version = $new' frontend/package.json > frontend/package.json.tmp && mv frontend/package.json.tmp frontend/package.json
-          echo "新版本号: $NEW_VERSION"
+          V="${{ inputs.version }}"
+          if [ -z "$V" ]; then
+            V=$(git describe --tags --always)
+          fi
+          echo "VERSION=$V" >> $GITHUB_OUTPUT
+          echo "构建版本号: $V"
 
-      - name: 构建前端 (frontend)
-        working-directory: ./frontend
-        run: |
-          npm ci
-          npm run build
+      - name: 构建（前端 + 同步 + 后端，注入版本号）
+        run: make V=${{ steps.version.outputs.VERSION }}
 
-      - name: 同步前端构建产物到 backend/dist
-        run: |
-          rm -rf backend/dist
-          mkdir -p backend
-          cp -r frontend/dist backend/dist
-
-      - name: 构建 Go 后端（${{ matrix.arch }}）
-        working-directory: ./backend
-        run: |
-          GOOS=linux CGO_ENABLED=0 GOARCH=${{ matrix.arch }} go build -ldflags="-s -w" -o ../fluxor-${{ matrix.arch }}
+      - name: 重命名产物
+        run: mv fluxor fluxor-${{ matrix.arch }}
 
       - name: 上传 fluxor-${{ matrix.arch }} 作为 Artifact
         uses: actions/upload-artifact@v7
@@ -66,16 +66,20 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: 检出源码（用于读取版本号和 commit 日志）
+      - name: 检出源码（用于读取版本号与 commit 日志）
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: 读取 package.json 中的版本号
+      - name: 确定版本号
         id: get_version
         run: |
-          VERSION=$(jq -r '.version' frontend/package.json)
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          V="${{ inputs.version }}"
+          if [ -z "$V" ]; then
+            V=$(git describe --tags --always)
+          fi
+          echo "VERSION=$V" >> $GITHUB_OUTPUT
+          echo "发布版本号: $V"
 
       - name: 生成 Release Notes（从上一个 tag 到现在的完整 commit 消息）
         id: get_notes

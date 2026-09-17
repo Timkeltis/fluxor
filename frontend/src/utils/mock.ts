@@ -117,6 +117,9 @@ export function handleMockFetch(path: string, options: RequestInit = {}): Respon
   const reply = (data: any, status = 200) => new Response(JSON.stringify(data), { status })
 
   if (cleanPath.endsWith('/core/status')) return reply({ running: coreRunning })
+  // 后端编译期注入的版本号（dev 模式下用固定值模拟）
+  if (cleanPath.endsWith('/app-version')) return reply({ version: '1.0.0' })
+  if (cleanPath.endsWith('/check-update')) return reply({ hasUpdate: false, current: '1.0.0' })
   if (cleanPath.endsWith('/core/start')) { coreRunning = true; return reply({ status: 'ok' }) }
   if (cleanPath.endsWith('/core/stop')) { coreRunning = false; return reply({ status: 'ok' }) }
   if (cleanPath.endsWith('/restart') || cleanPath.endsWith('/core/restart')) return reply({ status: 'ok' })

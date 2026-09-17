@@ -41,7 +41,29 @@ import Logs from './views/Logs.vue'
 import Config from './views/Config.vue'
 import Subscription from './views/Subscription.vue'
 
-const appVersion = __APP_VERSION__
+// 版本号由后端在编译期注入并经 GET /app-version 暴露，
+// 前端不再依赖构建期常量 __APP_VERSION__。
+const appVersion = ref('')
+
+// 展示用版本号：形如 1.2.3 的数字版本前缀 v；"dev"（构建时未注入）或空值原样显示，
+// 避免出现 "vdev" 这类无意义的字样。
+const appVersionDisplay = computed(() => {
+  const v = appVersion.value
+  if (!v) return '—'
+  return /^\d/.test(v) ? `v${v}` : v
+})
+
+const fetchAppVersion = async () => {
+  try {
+    const resp = await apiFetch('/app-version')
+    if (resp.ok) {
+      const data = await resp.json()
+      appVersion.value = data.version || ''
+    }
+  } catch (e) {
+    console.error('获取面板版本失败', e)
+  }
+}
 
 import { useTheme } from './composables/useTheme'
 import { useLanguage } from './composables/useLanguage'
@@ -196,7 +218,8 @@ const handleCheckUpdate = async () => {
   const checkingToastId = globalStore.showToast(t('update.checking'), 'info')
 
   try {
-    const resp = await apiFetch(`/check-update?current=${appVersion}`)
+    // 当前版本由后端自行获知（编译期注入），无需再传 ?current=
+    const resp = await apiFetch('/check-update')
 
     setTimeout(() => {
       globalStore.removeToast(checkingToastId)
@@ -207,6 +230,8 @@ const handleCheckUpdate = async () => {
       globalStore.updateInfo = data
       if (data.hasUpdate) {
         globalStore.showToast(t('update.available_toast', { latest: data.latest }), 'info')
+      } else if (data.versionUnknown) {
+        globalStore.showToast(t('update.version_unknown'), 'warning')
       } else {
         globalStore.showToast(t('update.already_latest'), 'info')
       }
@@ -265,8 +290,9 @@ onMounted(async () => {
     })
     .catch(() => {}) // 静默失败，不影响正常使用
 
-  // 检查 Fluxor 自身更新
-  apiFetch(`/check-update?current=${appVersion}`)
+  // 先取面板版本（后端编译期注入），再检查 Fluxor 自身更新
+  await fetchAppVersion()
+  apiFetch('/check-update')
     .then(res => res.ok ? res.json() : null)
     .then(data => {
       if (data) {
@@ -604,8 +630,8 @@ onUnmounted(() => {
                   <span v-else-if="globalStore.updateInfo?.hasUpdate">{{ t('update.update_button', { latest: globalStore.updateInfo.latest }) }}</span>
                   <span v-else>{{ t('update.check_update') }}</span>
                 </button>
-                <!-- 版本号 -->
-                <span class="font-bold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200">v{{ appVersion }}</span>
+                <!-- 版本号：仅当是形如 1.2.3 的版本号时前缀 v，dev 等占位值原样显示 -->
+                <span class="font-bold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200">{{ appVersionDisplay }}</span>
               </div>
             </div>
             <!-- 更新日志区域（仅当有更新且存在 releaseNotes 时显示） -->

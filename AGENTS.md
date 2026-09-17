@@ -9,8 +9,9 @@
 `Fluxor` 是一个轻量级、无冗余的 Mihomo 内核管理面板与订阅生成系统。它采用**前后端不分离**的架构设计：
 - **后端 (Go)**：位于 `backend/` 目录，以 Go 标准库为主，仅引入两个外部依赖：`gorilla/websocket`（通信）与 `gopkg.in/yaml.v3`（订阅/配置文件字段级校验）。新增依赖需有明确理由。后端托管在 Unix Socket (`/var/apps/Fluxor/target/app.sock`) 上，对外通过前端反向代理暴露，内嵌了前端的所有静态资源。
 - **前端 (Vue 3 TypeScript 版)**：位于 `frontend/` 目录，由 Vue 3 (Composition API / Setup) + Vite + TailwindCSS + Pinia + TypeScript 构成，是项目唯一且主维护的前端实现。
-  - **前端构建与内嵌**：`frontend/` 使用 Vite 构建，产物输出到 `frontend/dist/`（含 `index.html` 模板与 `assets/` 静态资源）。通过 `make sync`（或完整 `make`）将 `frontend/dist` 同步到 `backend/dist/`，后端在 `backend/main.go` 中以 `//go:embed dist` 直接内嵌该产物。
-  - **开发环境编译**：任何新功能或漏洞修复请在 Vue 3 版本中维护，修改前端代码后，需在 `frontend` 目录下执行 `npm run build`，并在项目根目录执行 `make` 完成整体构建。
+  - **前端构建与内嵌**：`frontend/` 使用 Vite 构建，产物输出到 `frontend/dist/`（含 `index.html` 模板与 `assets/` 静态资源）。直接执行 `make` 会清理旧 dist、构建前端、同步到 `backend/dist/`，再由后端在 `backend/main.go` 中以 `//go:embed dist` 内嵌该产物。
+  - **版本号**：不在前端注入。编译时经 `-ldflags -X fluxor/internal/buildinfo.Version=...` 写入后端（`make V=1.0.0`），前端经 `GET /app-version` 读取。
+  - **开发环境编译**：任何新功能或漏洞修复请在 Vue 3 版本中维护，修改前端代码后在项目根目录执行 `make` 完成整体构建。
 
 ### 核心功能职责
 
@@ -24,13 +25,13 @@
 
 ```text
 fluxor/
-├── Makefile               # 统一构建入口：make / make frontend / make backend / make sync / make run / make clean
+├── Makefile               # 统一构建入口：make（清 dist → 前端 → 同步 → 后端）、make clean、make V=x.y.z
 ├── backend/               # Go 后端源码目录（独立 Go module，root 位于 backend/go.mod）
 │   ├── main.go            # 程序入口：参数/环境变量解析、路由注册、监听启动、优雅退出，
 │   │                      #   并以 //go:embed dist 内嵌前端构建产物
 │   ├── internal/          # 按功能域拆分的后端实现（详见「2.1 后端包结构」）
 │   ├── go.mod / go.sum    # Go module 定义与依赖
-│   └── dist/              # 构建产物目录（由 `make sync` 从 frontend/dist 同步，已 gitignore）
+│   └── dist/              # 构建产物目录（由 make 从 frontend/dist 同步，已 gitignore）
 └── frontend/              # 主维护 Vue 3 前端源码目录
     ├── package.json       # Vue 3.5 + Pinia 4 + vue-i18n 11 + Vite 8 (Rolldown) + Tailwind CSS 4 + TypeScript 5.9 + @vicons/ionicons5
     ├── vite.config.js     # 构建输出到 dist/（index.html + assets/），集成 @tailwindcss/vite 插件
@@ -66,7 +67,7 @@ fluxor/
             └── Subscription.vue # 订阅：代理/面板端口、密钥显隐切换、规则集（lite/base/full）、UI 面板选择、订阅 CRUD 模态框（zoomIn 动画，支持订阅名称、链接、检测间隔、节点前缀）、流量/健康度/有效期卡片、「保存并应用」
 ```
 
-> **构建流程**：`make` → ① `frontend`：`npm run build` 输出到 `frontend/dist/`；② `sync`：拷贝至 `backend/dist/`；③ `backend`：在 `backend/` 内 `go build`（依赖 `//go:embed dist`）并输出二进制到项目根目录 `./fluxor`。
+> **构建流程**：`make` → ① 清理旧 `frontend/dist` 与 `backend/dist`；② `npm run build` 输出到 `frontend/dist/`；③ 拷贝至 `backend/dist/`；④ 在 `backend/` 内 `go build -ldflags` （依赖 `//go:embed dist`，同时注入版本号）输出到项目根目录 `./fluxor`。版本号用 `make V=1.0.0` 指定，缺省 `dev`。
 
 > **页面路由机制**：未使用 vue-router，通过 `globalStore.activeTab` 与 `<component :is="..." />` 动态组件切换视图。在此基础上，外层包裹了 `<KeepAlive :max="7">`（与视图总数一致，避免 LRU 淘汰引发的重挂）进行视图缓存，以长效留存页面各交互状态（如滚动进度与折叠状态）并规避切换页面时的重复连接请求。
 
@@ -167,11 +168,15 @@ backend/
     │   ├── github.go             #   Release/Tag 查询与版本比较
     │   ├── cache.go              #   版本信息缓存（TTL 10 分钟）
     │   ├── coreversion.go        #   内核本地/远程版本比对
-    │   ├── selfupdate.go         #   Fluxor 自更新（多加速源回退）
-    │   └── handler.go            #   /check-update
+    │   ├── selfupdate.go         #   Fluxor 自更新（多加速源回退；当前版本取自 buildinfo）
+    │   └── handler.go            #   /check-update（当前版本取自 buildinfo，无需 ?current=）
+    ├── buildinfo/                # 【叶子】构建期注入的版本号（-ldflags -X）
+    │   ├── doc.go                #   包说明
+    │   └── version.go            #   Version / Name() / IsKnown()
     └── web/                      # 前端入口渲染
         ├── index.go              #   index.html 模板渲染
-        └── whoami.go             #   /whoami
+        ├── whoami.go             #   /whoami
+        └── version.go            #   /app-version（暴露 buildinfo 版本给前端）
 ```
 
 **依赖方向（严格单向，不得出现环）**：实际图如下，可用 `go list -f '{{.ImportPath}} {{.Imports}}' ./...` 复核。
@@ -182,10 +187,11 @@ main ──> 所有 internal 包
 【叶子层】 config     （无 internal 依赖）
            httpx      （无 internal 依赖）
            configcheck（无 internal 依赖，仅依赖 yaml.v3）
+           buildinfo  （无 internal 依赖，版本号由 -ldflags 注入）
 
 【基础层】 configgen  ──> config, configcheck
            tproxy     ──> config, httpx
-           web        ──> config
+           web        ──> buildinfo, config
            wsproxy    ──> config
 
 【核心层】 core       ──> config, configcheck, configgen, httpx, tproxy
@@ -194,7 +200,7 @@ main ──> 所有 internal 包
 【业务层】 dashapi    ──> config, core, httpx, tproxy
            quality    ──> config, core, httpx
            delaytest  ──> netinfo, httpx
-           appupdate  ──> config, httpx, netinfo
+           appupdate  ──> buildinfo, config, httpx, netinfo
            subscription        ──> config, configcheck, configgen, core, dashapi, httpx, subscription/download
            subscription/download ──> config, configcheck, core
 ```
@@ -236,6 +242,7 @@ func (c *cancelableReadCloser) Close() error {
 |------|------|---------|------|
 | `/` | GET | `web.HandleIndex` | SPA 主页模板渲染 |
 | `/whoami` | GET | `web.HandleWhoAmI` | 获取当前用户信息 / 角色 |
+| `/app-version` | GET | `web.HandleAppVersion` | 获取 Fluxor 版本号（编译期注入，供前端展示与更新检查） |
 | `/core/status` | GET | `core.HandleCoreStatus` | 内核运行状态（PID 文件检测） |
 | `/core/start` | POST | `core.HandleCoreStart` | 启动内核进程 |
 | `/core/stop` | POST | `core.HandleCoreStop` | 停止内核进程（SIGTERM） |

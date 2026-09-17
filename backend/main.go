@@ -268,6 +268,7 @@ func main() {
 		mux.HandleFunc(config.BaseURL+"/", web.HandleIndex)
 	}
 	mux.HandleFunc(config.BaseURL+"/whoami", web.HandleWhoAmI)
+	mux.HandleFunc(config.BaseURL+"/app-version", web.HandleAppVersion)
 
 	// 内核控制
 	mux.HandleFunc(config.BaseURL+"/core/status", core.HandleCoreStatus)

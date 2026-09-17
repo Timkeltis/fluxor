@@ -2,6 +2,7 @@ package appupdate
 
 import (
 	"encoding/json"
+	"fluxor/internal/buildinfo"
 	"fluxor/internal/config"
 	"fluxor/internal/httpx"
 	"fluxor/internal/netinfo"
@@ -113,15 +114,16 @@ func HandleSelfUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	current := r.URL.Query().Get("current")
-	if current == "" {
-		current = "0.0.0"
+	// 当前版本取自编译期注入的 buildinfo.Version（不再由前端经 ?current= 传入）。
+	current := stripVersionSuffix(buildinfo.Name())
+	if !buildinfo.IsKnown() {
+		httpx.WriteJSONError(w, http.StatusBadRequest, "当前版本未知（构建时未注入版本号），无法自更新")
+		return
 	}
 	if compareVersions(rel.TagName, current) <= 0 {
 		httpx.WriteJSONError(w, http.StatusBadRequest, "当前已是最新版本，无需更新")
 		return
 	}
-	current = stripVersionSuffix(current)
 
 	// 确定目标路径
 	targetPath := filepath.Join(config.FluxorBinDir, "fluxor")

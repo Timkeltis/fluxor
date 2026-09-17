@@ -32,6 +32,7 @@ const messages = {
     'update.core_update_available': '内核新版本 {latest}',
     'update.check_update': '检查更新',
     'update.already_latest': '当前已是最新版本',
+    'update.version_unknown': '当前版本未知（构建时未注入版本号）',
     'update.checking': '检查更新中...',
 
 
@@ -392,6 +393,7 @@ const messages = {
     'update.core_update_available': 'New Mihomo Version {latest}',
     'update.check_update': 'Check Update',
     'update.already_latest': 'Already using the latest version',
+    'update.version_unknown': 'Version unknown (not injected at build time)',
     'update.checking': 'Checking for updates...',
     'nav.overview': 'Overview',
     'nav.proxies': 'Proxies',
