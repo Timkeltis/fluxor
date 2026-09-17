@@ -37,6 +37,23 @@
   [role="button"]:not(:disabled) {
     cursor: pointer;
   }
+
+  /* 隐藏数字输入框的步进按钮（增大/减小）。
+     桌面浏览器默认会在 <input type="number"> 右侧渲染上下箭头，与本站扁平的
+     表单样式不协调，且端口/间隔这类值用户都是直接键入，几乎不会用到步进。
+     两类内核分别处理：
+       - Chromium / Safari：伪元素
+       - Firefox：appearance: textfield（Firefox 无对应伪元素） */
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
 }
 
 /* 还原 v3 的 space-y / space-x 语义。

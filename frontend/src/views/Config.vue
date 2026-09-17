@@ -61,14 +61,44 @@ const fetchInterfaces = async () => {
   }
 }
 
+// TUN 高级设置弹窗：TUN 设备名 + 出口网卡
+// 实时修改（字段变更即写回后端），无保存按钮，仅关闭。
+const showTunAdvancedDialog = ref(false)
+
 // tproxy例外列表弹窗
 const showTproxyExceptionsDialog = ref(false)
 
 const tproxyDstExceptionsText = ref('')
 const tproxySrcExceptionsText = ref('')
-const tproxyProxyLocal = ref(false)
 
-// 在 openTproxyExceptionsDialog 中同时获取例外列表和本机开关
+// 本机流量代理开关（已从弹窗移至开关行下方，故状态提升为页面级）
+const tproxyProxyLocal = ref(false)
+const tproxyProxyLocalLoaded = ref(false)
+
+// 打开 TUN 高级设置弹窗：弹窗内两项均为实时修改，无需预设值，
+// 仅确保网卡列表已加载
+const openTunAdvancedDialog = async () => {
+  if (interfaces.value.length === 0) {
+    await fetchInterfaces()
+  }
+  showTunAdvancedDialog.value = true
+}
+
+// 读取本机流量代理开关状态
+const fetchTproxyProxyLocal = async () => {
+  try {
+    const resp = await apiFetch('/config/tproxy/proxy-local')
+    if (resp.ok) {
+      const data = await resp.json()
+      tproxyProxyLocal.value = data.enabled
+      tproxyProxyLocalLoaded.value = true
+    }
+  } catch (e) {
+    console.error('获取本机流量代理开关失败:', e)
+  }
+}
+
+// 在 openTproxyExceptionsDialog 中获取例外列表
 const openTproxyExceptionsDialog = async () => {
   if (configStore.tproxyEnabled) {
     globalStore.showToast(t('config.tproxy_exceptions_disabled_message'), 'warning')
@@ -82,17 +112,13 @@ const openTproxyExceptionsDialog = async () => {
       // 直接使用后端数据，不额外填充默认值
       tproxySrcExceptionsText.value = (data.src || []).join('\n')
     }
-    const resp2 = await apiFetch('/config/tproxy/proxy-local')
-    if (resp2.ok) {
-      const data2 = await resp2.json()
-      tproxyProxyLocal.value = data2.enabled
-    }
     showTproxyExceptionsDialog.value = true
   } catch (e) {
     globalStore.showToast(t('common.error'), 'error')
   }
 }
-// 修改保存函数：同时保存例外列表和本机代理开关（如果变化）
+
+// 仅保存例外列表（本机流量代理开关已移出该弹窗）
 const saveTproxyExceptions = async () => {
   const dstLines = tproxyDstExceptionsText.value.split('\n').map(s => s.trim()).filter(s => s !== '')
   const srcLines = tproxySrcExceptionsText.value.split('\n').map(s => s.trim()).filter(s => s !== '')
@@ -103,15 +129,8 @@ const saveTproxyExceptions = async () => {
       body: JSON.stringify({ dst: dstLines, src: srcLines })
     })
     if (resp.ok) {
-      // 保存本机代理开关
-      await apiFetch('/config/tproxy/proxy-local', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: tproxyProxyLocal.value })
-      })
       globalStore.showToast(t('config.tproxy_exceptions_saved'), 'success')
       showTproxyExceptionsDialog.value = false
-      await configStore.refreshTproxyState()
     } else {
       globalStore.showToast(t('common.operation_failed'), 'error')
     }
@@ -550,22 +569,39 @@ const handleDNSQuery = async (e?: Event) => {
   }
 }
 
-// 处理本机代理开关切换（开启时弹窗确认）
+// 处理本机流量代理开关。
+//
+// 语义（与用户约定一致）：
+//   - 开启：先二次确认，确认后才写入后端持久化文件；
+//   - 关闭：直接写入后端持久化，不确认。
+// 后端成功写入后即以服务端返回值为准回写本地状态，避免界面与磁盘不一致。
 const handleProxyLocalToggle = async (newVal: boolean) => {
   if (newVal) {
-    // 尝试开启 -> 弹窗警告
     const confirmed = await globalStore.showConfirm({
       title: t('common.warning'),
       message: t('config.tproxy_proxy_local_warning'),
       type: 'warning'
     })
-    if (confirmed) {
-      tproxyProxyLocal.value = true
+    if (!confirmed) return // 取消则保持原值
+  }
+  await persistProxyLocal(newVal)
+}
+
+// persistProxyLocal 写入本机流量代理开关并同步本地状态
+const persistProxyLocal = async (enabled: boolean) => {
+  try {
+    const resp = await apiFetch('/config/tproxy/proxy-local', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled })
+    })
+    if (!resp.ok) {
+      globalStore.showToast(t('common.operation_failed'), 'error')
     }
-    // 取消则保持原值（false）
-  } else {
-    // 关闭直接生效
-    tproxyProxyLocal.value = false
+  } catch (e) {
+    globalStore.showToast(`${t('common.error')}: ${(e as Error).message}`, 'error')
+  } finally {
+    await fetchTproxyProxyLocal() // 以服务端状态为准
   }
 }
 
@@ -596,6 +632,7 @@ const changeLang = () => {
 
 onMounted(async () => {
   fetchInterfaces()
+  fetchTproxyProxyLocal()
 })
 
 onUnmounted(() => {
@@ -758,34 +795,28 @@ onUnmounted(() => {
             {{ t('config.tun_settings') }}
           </h4>
 
-          <!-- TUN 模式 -->
+          <!-- TUN 模式。齿轮按钮与「启用 TProxy」一致：点击打开高级设置弹窗，
+               弹窗内为 TUN 设备名与出口网卡（实时修改）。 -->
           <div class="flex items-center justify-between">
-            <label class="text-xs font-semibold text-slate-700 dark:text-slate-300">{{ t('config.tun_enable') }}</label>
+            <div class="flex items-center gap-2">
+              <label class="text-xs font-semibold text-slate-700 dark:text-slate-300">{{ t('config.tun_enable') }}</label>
+              <button
+                @click="openTunAdvancedDialog"
+                class="p-1 text-slate-400 hover:text-accent rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+                :title="t('config.tun_advanced_title')"
+              >
+                <SettingsOutline class="w-4 h-4" />
+              </button>
+            </div>
             <FormSwitch :model-value="configs.tun.enable" @update:model-value="handleTunToggle"/>
           </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div class="flex flex-col gap-1">
-              <label class="text-xs font-semibold text-slate-600 dark:text-slate-400">{{ t('config.tun_stack') }}</label>
-              <select v-model="configs.tun.stack" @change="saveTun"
-                class="px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-accent outline-none w-full">
-                <option value="gVisor">gVisor</option>
-                <option value="System">System</option>
-                <option value="Mixed">Mixed</option>
-              </select>
-            </div>
-            <div class="flex flex-col gap-1">
-              <label class="text-xs font-semibold text-slate-600 dark:text-slate-400">{{ t('config.tun_device') }}</label>
-              <input type="text" v-model="configs.tun.device" @blur="saveTun" @keyup.enter="saveTun" :placeholder="t('config.interface_name_placeholder')"
-                class="px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-accent outline-none w-full" />
-            </div>
-          </div>
-
           <div class="flex flex-col gap-1">
-            <label class="text-xs font-semibold text-slate-600 dark:text-slate-400">{{ t('config.interface_name') }}</label>
-            <select v-model="configs['interface-name']" @change="saveInterface"
+            <label class="text-xs font-semibold text-slate-600 dark:text-slate-400">{{ t('config.tun_stack') }}</label>
+            <select v-model="configs.tun.stack" @change="saveTun"
               class="px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:ring-2 focus:ring-accent outline-none w-full">
-              <option value="">{{ t('config.interface_name_auto') }}</option>
-              <option v-for="iface in interfaces" :key="iface" :value="iface">{{ iface }}</option>
+              <option value="gVisor">gVisor</option>
+              <option value="System">System</option>
+              <option value="Mixed">Mixed</option>
             </select>
           </div>
 
@@ -809,6 +840,25 @@ onUnmounted(() => {
             </div>
             <div v-if="!configStore.tproxyStateLoaded" class="w-7 h-4 rounded-full bg-slate-200 dark:bg-slate-700 animate-pulse"></div>
             <FormSwitch v-model="configStore.tproxyEnabled" @update:model-value="toggleTProxy" />
+          </div>
+
+          <!-- 代理本机流量（由弹窗移出）。
+               启用 TProxy 时禁止修改：此时切换会重建 nft 规则，而 TProxy 开关
+               正持有规则，故禁用。 -->
+          <div class="flex items-center justify-between">
+            <label
+              class="text-xs font-semibold"
+              :class="configStore.tproxyEnabled ? 'text-slate-400 dark:text-slate-500' : 'text-slate-700 dark:text-slate-300'"
+            >
+              {{ t('config.tproxy_proxy_local_label') }}
+            </label>
+            <div v-if="!tproxyProxyLocalLoaded" class="w-7 h-4 rounded-full bg-slate-200 dark:bg-slate-700 animate-pulse"></div>
+            <FormSwitch
+              v-else
+              :model-value="tproxyProxyLocal"
+              :disabled="configStore.tproxyEnabled"
+              @update:model-value="handleProxyLocalToggle"
+            />
           </div>
         </div>
 
@@ -1053,16 +1103,6 @@ onUnmounted(() => {
               ></textarea>
             </div>
 
-            <!-- 本机代理开关 -->
-            <div class="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800/60">
-              <label class="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                {{ t('config.tproxy_proxy_local_label') }}
-              </label>
-              <FormSwitch
-                :model-value="tproxyProxyLocal"
-                @update:model-value="handleProxyLocalToggle"
-              />
-            </div>
           </div>
         </div>
 
@@ -1073,6 +1113,61 @@ onUnmounted(() => {
           </button>
           <button @click="saveTproxyExceptions" class="px-4 py-2 text-sm font-semibold rounded-xl bg-accent hover:bg-accent-hover text-white transition-all shadow-md shadow-accent/15">
             {{ t('common.save') }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- ====== TUN 高级设置弹窗（实时修改，仅关闭） ====== -->
+  <Teleport to="body">
+    <div v-if="showTunAdvancedDialog" class="fixed inset-0 glass-mask z-[9999] flex items-center justify-center p-4" @click.self="showTunAdvancedDialog = false">
+      <div class="glass-heavy w-full max-w-lg max-h-[90vh] rounded-[20px] shadow-2xl border p-6 flex flex-col gap-4 animate-[zoomIn_0.15s_ease-out]">
+        <div class="flex-shrink-0">
+          <h4 class="text-lg font-bold">{{ t('config.tun_advanced_title') }}</h4>
+        </div>
+
+        <div class="flex-1 min-h-0 overflow-y-auto">
+          <div class="space-y-4">
+            <!-- TUN 设备名（失焦/回车即时写回） -->
+            <div class="flex flex-col gap-1">
+              <label class="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                {{ t('config.tun_device') }}
+              </label>
+              <input
+                type="text"
+                v-model="configs.tun.device"
+                @blur="saveTun"
+                @keyup.enter="saveTun"
+                :placeholder="t('config.interface_name_placeholder')"
+                class="px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 focus:ring-2 focus:ring-accent outline-none w-full"
+              />
+            </div>
+
+            <!-- 出口网卡（选择即写回） -->
+            <div class="flex flex-col gap-1 pt-2 border-t border-slate-100 dark:border-slate-800/60">
+              <label class="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                {{ t('config.interface_name') }}
+              </label>
+              <select
+                v-model="configs['interface-name']"
+                @change="saveInterface"
+                class="px-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 focus:ring-2 focus:ring-accent outline-none w-full"
+              >
+                <option value="">{{ t('config.interface_name_auto') }}</option>
+                <option v-for="iface in interfaces" :key="iface" :value="iface">{{ iface }}</option>
+              </select>
+              <p class="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">
+                {{ t('config.tun_advanced_interface_hint') }}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 仅关闭按钮：修改实时生效，无需保存 -->
+        <div class="flex justify-end pt-3 border-t border-slate-100 dark:border-slate-800/60 flex-shrink-0">
+          <button @click="showTunAdvancedDialog = false" class="px-4 py-2 text-sm font-semibold rounded-xl bg-accent hover:bg-accent-hover text-white transition-all shadow-md shadow-accent/15">
+            {{ t('common.close') }}
           </button>
         </div>
       </div>
