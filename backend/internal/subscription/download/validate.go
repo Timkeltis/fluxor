@@ -1,15 +1,14 @@
 package download
 
 import (
-	"strings"
+	"fluxor/internal/configcheck"
 )
 
-// isValidSubscription 检查内容是否包含有效订阅标志
-func isValidSubscription(content string) bool {
-	// 检查是否包含 proxies: 或 proxy-providers: 或 proxy-groups:
-	// 简单匹配，忽略大小写
-	lower := strings.ToLower(content)
-	return strings.Contains(lower, "proxies:") ||
-		strings.Contains(lower, "proxy-providers:") ||
-		strings.Contains(lower, "proxy-groups:")
+// validateSubscriptionContent 校验直连获取的内容是否为可被内核加载的 Clash 配置。
+//
+// 与临时内核产出侧的校验共用 configcheck，避免两处判定标准漂移：
+// 此前这里是「子串匹配 proxies:」的弱校验，既放过了注释里的假字段，
+// 也无法识别字段类型错误。
+func validateSubscriptionContent(content string) error {
+	return configcheck.ValidateClashConfig([]byte(content))
 }

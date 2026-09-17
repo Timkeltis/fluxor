@@ -2,7 +2,7 @@ package subscription
 
 // Package subscription 实现订阅中心：配置 CRUD、节点文件下载、定时更新与健康检查。
 //
-// 子目录 download 是独立的下载层（直接 HTTP 下载 + Base64 解析 + 元数据解析），
+// 子目录 download 是独立的下载层（Clash YAML 直连下载 + 临时内核回退 + 元数据解析），
 // 被本包复用；它不反向依赖本包，因此不会形成循环。
 //
 // 文件划分：

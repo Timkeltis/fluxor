@@ -30,14 +30,21 @@ func HandleGenerateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 订阅名会用作节点文件名与 provider 键，必须在此拦截非法字符
+	if err := config.ValidateSubscriptionNames(cfg.Subscriptions); err != nil {
+		httpx.WriteJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	// 物理清理标记删除的配置文件，使用 filepath.Base 防范路径穿越
 	if len(cfg.DeletePhysical) > 0 {
 		for _, name := range cfg.DeletePhysical {
-			cleanName := filepath.Base(name)
-			if cleanName == "." || cleanName == "/" || cleanName == "\\" {
+			// 与写入侧使用同一套文件名规则，避免删错文件或漏删
+			fileName := config.SanitizeSubscriptionFileName(name)
+			if fileName == ".yaml" {
 				continue
 			}
-			targetFile := filepath.Join(config.CoreWorkDir, "proxies", cleanName+".yaml")
+			targetFile := filepath.Join(config.CoreWorkDir, "proxies", fileName)
 			if _, err := os.Stat(targetFile); err == nil {
 				if err := os.Remove(targetFile); err != nil {
 					log.Printf("[DELETE] 物理删除配置文件失败 %s: %v", targetFile, err)
@@ -95,8 +102,16 @@ func HandleGenerateConfig(w http.ResponseWriter, r *http.Request) {
 			httpx.WriteJSONError(w, http.StatusBadRequest, "切换模式下请先选择一个订阅")
 			return
 		}
+		// 选中名必须是当前订阅列表中的真实成员。
+		// active_subscription 以订阅名为键，改名/删除后客户端可能仍持有旧名；
+		// 只校验空字符串会让旧名一路走到下面，按旧名复制旧订阅文件，
+		// 出现「界面显示新名字、实际生效旧配置」的静默错配。
+		if !activeSubscriptionExists(cfg) {
+			httpx.WriteJSONError(w, http.StatusBadRequest, "选中的订阅不存在: "+cfg.ActiveSubscription)
+			return
+		}
 		// 构建源文件路径
-		srcFile := filepath.Join(config.CoreWorkDir, "proxies", cfg.ActiveSubscription+".yaml")
+		srcFile := filepath.Join(config.CoreWorkDir, "proxies", config.SanitizeSubscriptionFileName(cfg.ActiveSubscription))
 		if _, err := os.Stat(srcFile); err != nil {
 			httpx.WriteJSONError(w, http.StatusInternalServerError, "选中的订阅文件不存在: "+err.Error())
 			return

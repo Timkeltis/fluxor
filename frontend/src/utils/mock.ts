@@ -131,7 +131,16 @@ export function handleMockFetch(path: string, options: RequestInit = {}): Respon
     }
     return reply(mockSubConfig)
   }
-  if (cleanPath.endsWith('/subscribe/generate')) return reply({ status: 'ok' })
+  if (cleanPath.endsWith('/subscribe/generate')) {
+    // 与后端一致：保存订阅配置并落库，使随后的 /subscribe/config 能读到最新订阅列表
+    if (method === 'POST') {
+      const payload = JSON.parse(options.body as string || '{}')
+      // delete_physical 是临时字段，后端不会持久化
+      delete payload.delete_physical
+      Object.assign(mockSubConfig, payload)
+    }
+    return reply({ status: 'ok' })
+  }
 
   if (cleanPath.endsWith('/proxies')) return reply({ proxies: mockProxies })
   if (cleanPath.includes('/proxies/') && cleanPath.endsWith('/delay')) {

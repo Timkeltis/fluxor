@@ -23,7 +23,7 @@ func updateSubscriptionInSwitchMode(cfg *config.SubscribeConfig, subName string)
 	}
 
 	proxiesDir := filepath.Join(config.CoreWorkDir, "proxies")
-	targetFile := filepath.Join(proxiesDir, subName+".yaml")
+	targetFile := filepath.Join(proxiesDir, config.SanitizeSubscriptionFileName(subName))
 
 	// 强制删除已有文件（确保重新下载）
 	if err := os.Remove(targetFile); err != nil && !os.IsNotExist(err) {

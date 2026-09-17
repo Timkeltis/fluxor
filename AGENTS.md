@@ -7,7 +7,7 @@
 ## 1. 项目定位与架构概述
 
 `Fluxor` 是一个轻量级、无冗余的 Mihomo 内核管理面板与订阅生成系统。它采用**前后端不分离**的架构设计：
-- **后端 (Go)**：位于 `backend/` 目录，使用 Go 标准库（仅引入 `gorilla/websocket` 作为唯一外部依赖）。后端托管在 Unix Socket (`/var/apps/Fluxor/target/app.sock`) 上，对外通过前端反向代理暴露，内嵌了前端的所有静态资源。
+- **后端 (Go)**：位于 `backend/` 目录，以 Go 标准库为主，仅引入两个外部依赖：`gorilla/websocket`（通信）与 `gopkg.in/yaml.v3`（订阅/配置文件字段级校验）。新增依赖需有明确理由。后端托管在 Unix Socket (`/var/apps/Fluxor/target/app.sock`) 上，对外通过前端反向代理暴露，内嵌了前端的所有静态资源。
 - **前端 (Vue 3 TypeScript 版)**：位于 `frontend/` 目录，由 Vue 3 (Composition API / Setup) + Vite + TailwindCSS + Pinia + TypeScript 构成，是项目唯一且主维护的前端实现。
   - **前端构建与内嵌**：`frontend/` 使用 Vite 构建，产物输出到 `frontend/dist/`（含 `index.html` 模板与 `assets/` 静态资源）。通过 `make sync`（或完整 `make`）将 `frontend/dist` 同步到 `backend/dist/`，后端在 `backend/main.go` 中以 `//go:embed dist` 直接内嵌该产物。
   - **开发环境编译**：任何新功能或漏洞修复请在 Vue 3 版本中维护，修改前端代码后，需在 `frontend` 目录下执行 `npm run build`，并在项目根目录执行 `make` 完成整体构建。
@@ -86,19 +86,23 @@ backend/
     │   ├── modes.go              #   fnos / openwrt 两套默认路径
     │   ├── env.go                #   环境变量读取工具
     │   └── load.go               #   配置加载、默认值补齐、持久化
-    ├── configgen/                # 【叶子】config.yaml 纯模板渲染（无状态、无网络）
+    ├── configgen/                # 【基础层】config.yaml 模板 + YAML 结构化改写
     │   ├── generator.go          #   GenerateConfig / GenerateBaseConfig
     │   ├── template_base.go      #   基础字段骨架
     │   ├── template_dns.go       #   统一注入的 DNS 块
     │   ├── groups_lite.go        #   base 规则集的代理组
     │   ├── rules_lite.go         #   base 规则集的规则
-    │   ├── groups_full.go        #   full 规则集的代理组（含 __SUB_NAMES__ 占位）
+    │   ├── groups_full.go        #   full 规则集的代理组（含 __SUB_NAMES__ 占位，按 YAML 节点注入订阅名）
     │   ├── providers_full.go     #   full 规则集的 rule-providers
     │   ├── rules_full.go         #   full 规则集的规则
-    │   └── names.go              #   订阅名称提取工具
+    │   └── doc.go                #   包说明
     ├── httpx/                    # 【叶子】HTTP 通用工具
     │   ├── response.go           #   WriteJSONError / RespondJSON
     │   └── regex.go              #   外部面板后端地址校验正则
+    ├── configcheck/              # 【叶子】Clash 配置校验与 YAML 文档操作（依赖 yaml.v3）
+    │   ├── doc.go                #   包说明：provider 契约 vs 主配置契约
+    │   ├── check.go              #   ValidateClashConfig：YAML 映射 + 顶层字段及类型校验
+    │   └── document.go           #   Doc：保留键序/注释的顶层字段读写与序列化
     ├── core/                     # 内核进程生命周期
     │   ├── client.go             #   CoreRequest + cancelableReadCloser（Context 回收）
     │   ├── lifecycle.go          #   启动/停止/热重载（重载后同步 TProxy 规则）
@@ -115,9 +119,8 @@ backend/
     │   ├── api_generate.go       #   /subscribe/generate
     │   ├── api_update.go         #   /subscribe/update/{name}
     │   ├── api_updateinfo.go     #   /subscribe/update-info/{name}
-    │   ├── patch.go              #   向节点文件注入端口/密钥/DNS
+    │   ├── patch.go              #   向节点文件注入端口/密钥/DNS（YAML 结构化改写）
     │   ├── ensure.go             #   切换模式下确保订阅文件就绪
-    │   ├── generator.go          #   调用 configgen 生成 config.yaml
     │   ├── update.go             #   切换模式下的单个订阅更新流程
     │   ├── metadata.go           #   元数据抓取与键规范化
     │   ├── timers.go             #   定时更新/健康检查定时器生命周期
@@ -126,8 +129,8 @@ backend/
     │   ├── fileutil.go           #   文件复制工具
     │   └── download/             #   【叶子】订阅下载层
     │       ├── download.go       #     直连优先、临时内核回退
-    │       ├── direct.go         #     直接 HTTP 下载 + Base64 解析 + userinfo 头解析
-    │       ├── validate.go       #     订阅内容有效性校验
+    │       ├── direct.go         #     直接 HTTP 下载（仅收 Clash 明文 YAML）+ userinfo 头解析
+    │       ├── validate.go       #     直连内容校验（委托 configcheck 做字段级校验）
     │       └── keys.go           #     map 键小写规范化
     ├── dashapi/                  # 内核 HTTP API 反向代理
     │   ├── dashboard.go          #   版本/流量/内存/连接
@@ -172,26 +175,27 @@ main ──> 所有 internal 包
 
 【叶子层】 config     （无 internal 依赖）
            httpx      （无 internal 依赖）
+           configcheck（无 internal 依赖，仅依赖 yaml.v3）
 
-【基础层】 configgen  ──> config
+【基础层】 configgen  ──> config, configcheck
            tproxy     ──> config, httpx
            web        ──> config
            wsproxy    ──> config
 
-【核心层】 core       ──> config, configgen, httpx, tproxy
+【核心层】 core       ──> config, configcheck, configgen, httpx, tproxy
            netinfo    ──> core, httpx
 
 【业务层】 dashapi    ──> config, core, httpx, tproxy
            quality    ──> config, core, httpx
            delaytest  ──> netinfo, httpx
            appupdate  ──> config, httpx, netinfo
-           subscription        ──> config, configgen, core, dashapi, httpx, subscription/download
-           subscription/download ──> config, core
+           subscription        ──> config, configcheck, configgen, core, dashapi, httpx, subscription/download
+           subscription/download ──> config, configcheck, core
 ```
 
 > **循环依赖规避要点（拆分时实际采用的三个手段）**：
-> 1. **下沉叶子包**：`core` 需要生成配置文件，而 `subscription` 依赖 `core`。若把生成逻辑留在 `subscription` 就会与 `core` 形成环，故将纯字符串渲染逻辑抽成不依赖任何 internal 包的叶子包 `configgen`，由 `core` 与 `subscription` 共同依赖。
-> 2. **同层共用工具下沉**：`subscription` 与其子包 `subscription/download` 都需要 map 键规范化，若留在父包则子包反向依赖父包，故下沉为 `subscription/download/keys.go`（`NormalizeMapKeys`）。
+> 1. **下沉叶子包**：`core` 需要生成配置文件，而 `subscription` 依赖 `core`。若把生成逻辑留在 `subscription` 就会与 `core` 形成环，故将配置生成与改写逻辑抽成包 `configgen`（只依赖 `config` 与叶子包 `configcheck`），由 `core` 与 `subscription` 共同依赖。
+> 2. **同层共用工具下沉**：`subscription` 与其子包 `subscription/download` 都需要 map 键规范化，若留在父包则子包反向依赖父包，故下沉为 `subscription/download/keys.go`（`NormalizeMapKeys`）；同理，`configgen`、`subscription`、`core` 三方都需要 YAML 校验与改写能力，一并下沉为叶子包 `configcheck`。
 > 3. **依赖方向统一为单向链**：订阅相关的内核调用统一为 `subscription → core`；`core.DownloadWithTempCore` 只接收 `config.Subscription` 数据结构，不反向引用订阅包，因此不产生环。
 
 > **新增后端代码时的约定**：先判断属于哪个功能域，再放入对应包；新增 HTTP Handler 放在该域的 `handlers.go` / `api*.go` 中；若新代码引入跨层调用，务必先确认不会形成依赖环——若会形成环，应把共用逻辑下沉为新的叶子包，或改为在同一方向上调用，切勿直接互相 import。

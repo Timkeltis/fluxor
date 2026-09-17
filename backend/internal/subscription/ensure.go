@@ -37,7 +37,7 @@ func ensureSubscriptionFiles(cfg *config.SubscribeConfig) error {
 			defer func() { <-sem }()
 
 			s := cfg.Subscriptions[idx]
-			targetFile := filepath.Join(proxiesDir, s.Name+".yaml")
+			targetFile := filepath.Join(proxiesDir, config.SanitizeSubscriptionFileName(s.Name))
 
 			// 检查文件是否存在以及是否有元数据
 			needDownload := false

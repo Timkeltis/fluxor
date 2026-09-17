@@ -30,6 +30,11 @@ func HandleSubscribeConfigAPI(w http.ResponseWriter, r *http.Request) {
 			httpx.WriteJSONError(w, http.StatusBadRequest, "外部面板后端地址格式不正确")
 			return
 		}
+		// 订阅名会用作节点文件名与 provider 键，必须在此拦截非法字符
+		if err := config.ValidateSubscriptionNames(newConfig.Subscriptions); err != nil {
+			httpx.WriteJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		config.Mu.Lock()
 		config.Current = newConfig
 		config.Mu.Unlock()

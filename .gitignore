@@ -9,6 +9,7 @@ upx-ucl
 .gomod
 .gopath
 .gocache
+mihomo
 
 # Makefile 增量构建标记
 .fluxor.target*

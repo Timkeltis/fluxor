@@ -58,6 +58,10 @@ export const useSubscriptionStore = defineStore('subscription', () => {
   let loadPromise: Promise<void> | null = null  // 新增：防止并发重复请求
 
   // 获取订阅中心配置（带缓存）
+  //
+  // 注意：force=false 且已加载过时是**空操作**（直接 return），不会发起请求。
+  // 需要拿到最新数据的调用方（保存后刷新、更新轮询等）必须 force=true
+  // 或改用 refreshConfig()，否则前端会一直停留在本地旧快照。
   const loadConfig = async (force = false) => {
     // 如果已加载且非强制刷新，直接返回
     if (isConfigLoaded.value && !force) {

@@ -9,6 +9,7 @@ import { useSubscriptionStore, type SubscriptionInfo, type SubscriptionItem } fr
 import { useRulesStore } from '../store/rules'
 import { useProxyStore } from '../store/proxies'
 import { useConfigStore } from '../store/config'
+import { validateSubscriptionName, filterSubscriptionNameInput, MAX_SUBSCRIPTION_NAME_LENGTH } from '../utils/subscription-name'
 
 const globalStore = useGlobalStore()
 const configStore = useConfigStore()
@@ -44,6 +45,12 @@ const activeSub = computed({
     set: (val: string) => { currentConfig.value.active_subscription = val; }
 })
 
+// 名称长度提示。字符集问题由输入框实时过滤拦截，此处只需提示长度。
+const nameHint = computed(() =>
+  validateSubscriptionName(editForm.value.name) === 'tooLong'
+    ? t('subscription.name_too_long')
+    : ''
+)
 // 点击卡片选中
 const selectSubscription = (name: string) => {
     if (currentConfig.value.mode === 'switch') {
@@ -55,9 +62,11 @@ const rulesStore = useRulesStore()
 const subscriptionStore = useSubscriptionStore()
 const { currentConfig, savedSubNames } = storeToRefs(subscriptionStore)
 
-const loadConfig = async () => {
+// 从后端重新拉取真实配置（force=true）。store 在已加载时会直接 return 旧快照，
+// 因此任何「改完后要看到最新状态」的场景都必须走这里，不能用 loadConfig()。
+const reloadConfig = async () => {
   try {
-    await subscriptionStore.loadConfig()
+    await subscriptionStore.loadConfig(true)
   } catch (e) {
     console.error('加载订阅配置失败', e)
   }
@@ -129,7 +138,7 @@ const handleUpdateSub = async (index: number) => {
 
     if (!resp.ok) {
       globalStore.showToast(`${t('subscription.operation_failed')}: ${result.message || ''}`, 'error')
-      await subscriptionStore.loadConfig() 
+      await reloadConfig()
       isUpdating.value[index] = false
       return
     }
@@ -143,7 +152,8 @@ const handleUpdateSub = async (index: number) => {
       const timer = setInterval(async () => {
         retries++
         try {
-          await subscriptionStore.loadConfig()
+          // 必须强制拉取：store 已加载时会直接返回旧快照，轮询将永远看不到 updatedAt 变化
+          await subscriptionStore.loadConfig(true)
           const updatedSub = currentConfig.value.subscriptions.find(s => s.name === sub.name)
           if (updatedSub && updatedSub.info?.updatedAt !== initialTime) {
             clearPoll(index)
@@ -256,6 +266,16 @@ const saveSubToList = () => {
     globalStore.showToast(t('common.name_required'), 'error')
     return
   }
+  // 订阅名会用作节点文件名与 provider 键，限制字符集（后端有同样的校验兜底）
+  const nameError = validateSubscriptionName(name)
+  if (nameError === 'tooLong') {
+    globalStore.showToast(t('subscription.name_too_long'), 'error')
+    return
+  }
+  if (nameError !== null) {
+    globalStore.showToast(t('subscription.name_invalid'), 'error')
+    return
+  }
   const isDuplicate = (currentConfig.value.subscriptions || []).some((sub, idx) => {
     return sub.name.trim() === name.trim() && idx !== editingIndex.value
   })
@@ -266,7 +286,13 @@ const saveSubToList = () => {
   const subData = { ...editForm.value }
   const wasEmpty = (currentConfig.value.subscriptions || []).length === 0
   if (editingIndex.value >= 0) {
+    // 重命名时必须同步迁移选中态：active_subscription 以订阅名为键，
+    // 若停留在旧名，切换模式下会「看起来没选中」却仍按旧名保存（复制旧文件）。
+    const oldName = currentConfig.value.subscriptions[editingIndex.value]?.name
     currentConfig.value.subscriptions[editingIndex.value] = subData
+    if (oldName && oldName !== subData.name && currentConfig.value.active_subscription === oldName) {
+      currentConfig.value.active_subscription = subData.name
+    }
   } else {
     if (!currentConfig.value.subscriptions) {
       currentConfig.value.subscriptions = []
@@ -302,16 +328,30 @@ const handleDeleteSub = async (index: number) => {
         pendingPhysicalDeletes.value.push(sub.name)
       }
     }
+    // 删除的若是当前选中的订阅，同步清空选中态，避免残留一个指向已删除订阅的旧名
+    if (currentConfig.value.active_subscription === sub.name) {
+      currentConfig.value.active_subscription = ''
+    }
     currentConfig.value.subscriptions.splice(index, 1)
   }
 }
 
 // 保存并应用
 const saveAndApply = async () => {
-  // 切换模式时，必须选中一个订阅
-  if (currentConfig.value.mode === 'switch' && !currentConfig.value.active_subscription) {
-    globalStore.showToast(t('subscription.switch_no_selection'), 'error')
-    return
+  // 切换模式下的选中校验：
+  // 有订阅时必须选中其中之一，且选中名必须真实存在——改名/删除后可能残留旧名
+  // （后端只判空字符串），若不拦截，后端会按旧名复制旧订阅文件，而前端既不选中
+  // 任何卡片、界面又显示新名字，造成「显示与生效不一致」。
+  // 无订阅时允许保存（清空选中态），后端会据此生成基础配置。
+  const subsForSelection = currentConfig.value.subscriptions || []
+  if (currentConfig.value.mode === 'switch') {
+    if (subsForSelection.length === 0) {
+      currentConfig.value.active_subscription = ''
+    } else if (!subsForSelection.some(s => s.name === currentConfig.value.active_subscription)) {
+      currentConfig.value.active_subscription = ''
+      globalStore.showToast(t('subscription.switch_no_selection'), 'error')
+      return
+    }
   }
   // 端口必填
   if (!currentConfig.value.proxy_port || !currentConfig.value.panel_port) {
@@ -389,8 +429,8 @@ const saveAndApply = async () => {
       globalStore.showToast(result.message || t('subscription.apply_success'), 'success')
       // 清空待物理删除列表
       pendingPhysicalDeletes.value = []
-      // 重新加载配置，保持前后端数据一致
-      await loadConfig()
+      // 重新加载配置，保持前后端数据一致（必须 force，否则只会读回本地旧快照）
+      await reloadConfig()
       // 刷新规则和代理列表
       rulesStore.fetchRules(true)
       rulesStore.fetchProviders(true)
@@ -670,7 +710,15 @@ onUnmounted(() => {
           <div class="space-y-4">
             <div class="flex flex-col gap-1.5">
               <label class="text-xs font-semibold text-slate-600 dark:text-slate-400">{{ t('subscription.name') }}</label>
-              <input type="text" v-model="editForm.name" :placeholder="t('subscription.name_placeholder')" class="px-3.5 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 focus:ring-2 focus:ring-accent outline-none text-sm" />
+              <input
+                type="text"
+                :value="editForm.name"
+                @input="editForm.name = filterSubscriptionNameInput(($event.target as HTMLInputElement).value)"
+                :maxlength="MAX_SUBSCRIPTION_NAME_LENGTH"
+                :placeholder="t('subscription.name_placeholder')"
+                class="px-3.5 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 focus:ring-2 focus:ring-accent outline-none text-sm"
+              />
+              <p v-if="nameHint" class="text-[11px] text-danger">{{ nameHint }}</p>
             </div>
             <div class="flex flex-col gap-1.5">
               <label class="text-xs font-semibold text-slate-600 dark:text-slate-400">{{ t('subscription.url') }}</label>
