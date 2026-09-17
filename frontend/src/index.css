@@ -147,45 +147,49 @@
 }
 
 [data-theme="purple"] {
-  /* 紫色主题 */
-  --bg-primary: #0a0516;
-  --bg-secondary: #120a24;
-  --bg-card: #120a24;
-  --bg-input: #1b0f35;
-  --text-primary: #f3e8ff;
-  --text-secondary: #a78bfa;
-  --border-color: #2e1065;
-  --accent: #c084fc;
-  --accent-hover: #a855f7;
-  --danger: #f43f5e;
-  --danger-hover: #e11d48;
-  --success: #10b981;
+  /* 魅惑紫主题
+     主色取亮紫 #a855f7（比原 #c084fc 更饱和、有光泽），并把整体背景由
+     近黑（原 --bg-primary #0a0516）提亮一档：原背景与亮紫反差过大，
+     长时间观看偏压抑。提亮后紫调更透气，同时保持深色主题应有的层次。 */
+  --bg-primary: #150d29;
+  --bg-secondary: #1c1236;
+  --bg-card: #1c1236;
+  --bg-input: #251847;
+  --text-primary: #f5edff;
+  --text-secondary: #c4b5fd;
+  --border-color: #3b2166;
+  --accent: #a855f7;
+  --accent-hover: #c084fc;
+  --danger: #fb7185;
+  --danger-hover: #f43f5e;
+  --success: #34d399;
   --warning: #fbbf24;
-  --sidebar-bg: #0e071e;
-  --card-bg: #120a24;
-  --hover-bg: rgba(192, 132, 252, 0.12);
-  --shadow: 0 8px 30px rgba(147, 51, 234, 0.12);
-  --btn-secondary-bg: #1e113a;
-  --btn-secondary-hover-bg: rgba(192, 132, 252, 0.18);
+  --sidebar-bg: #180f2e;
+  --card-bg: #1c1236;
+  --hover-bg: rgba(168, 85, 247, 0.14);
+  --shadow: 0 8px 30px rgba(168, 85, 247, 0.14);
+  --btn-secondary-bg: #291b4d;
+  --btn-secondary-hover-bg: rgba(168, 85, 247, 0.20);
 
-  /* 紫色磨砂玻璃 */
-  --bg-glass-heavy: rgba(10, 5, 22, 0.65);
-  --bg-glass-medium: rgba(10, 5, 22, 0.45);
-  --bg-glass-light: rgba(18, 10, 36, 0.25);
-  --bg-mask: rgba(10, 5, 22, 0.5);
-  --bg-modal-panel: rgba(18, 10, 36, 0.92);
-  --border-glass: rgba(192, 132, 252, 0.15);
+  /* 魅惑紫磨砂玻璃 */
+  --bg-glass-heavy: rgba(21, 13, 41, 0.65);
+  --bg-glass-medium: rgba(21, 13, 41, 0.45);
+  --bg-glass-light: rgba(28, 18, 54, 0.25);
+  --bg-mask: rgba(21, 13, 41, 0.5);
+  --bg-modal-panel: rgba(28, 18, 54, 0.92);
+  --border-glass: rgba(168, 85, 247, 0.18);
 
-  /* 紫色交互与滚动条 */
-  --scrollbar-thumb: rgba(168, 85, 247, 0.2);
-  --scrollbar-thumb-hover: rgba(168, 85, 247, 0.4);
-  --focus-ring: rgba(192, 132, 252, 0.25);
+  /* 魅惑紫交互与滚动条 */
+  --scrollbar-thumb: rgba(168, 85, 247, 0.25);
+  --scrollbar-thumb-hover: rgba(168, 85, 247, 0.45);
+  --focus-ring: rgba(168, 85, 247, 0.28);
 
-  /* 侧边栏激活高对比 */
+  /* 侧边栏激活高对比。
+     亮紫 #a855f7 上的白字对比度仅 3.96:1（低于 WCAG AA 的 4.5:1），
+     而深紫字色可达 4.57:1，故沿用深色字（与提亮后的底色同色系）。 */
   --sidebar-active-bg: var(--accent);
-  --sidebar-active-text: #0a0516;
-  /* 深紫字色 */
-  --sidebar-active-shadow: rgba(192, 132, 252, 0.25);
+  --sidebar-active-text: #150d29;
+  --sidebar-active-shadow: rgba(168, 85, 247, 0.30);
 }
 
 [data-theme="pink"] {
@@ -230,7 +234,7 @@
 }
 
 [data-theme="green"] {
-  /* 抹茶绿主题 (浅翠绿) */
+  /* 清新绿主题 (浅翠绿) */
   --bg-primary: #f0fdf4;
   --bg-secondary: #ffffff;
   --bg-card: #f0fdf4;
@@ -251,7 +255,7 @@
   --btn-secondary-bg: #dcfce7;
   --btn-secondary-hover-bg: rgba(52, 199, 89, 0.12);
 
-  /* 抹茶绿磨砂玻璃 */
+  /* 清新绿磨砂玻璃 */
   --bg-glass-heavy: rgba(255, 255, 255, 0.65);
   --bg-glass-medium: rgba(255, 255, 255, 0.45);
   --bg-glass-light: rgba(240, 253, 244, 0.25);
@@ -259,7 +263,7 @@
   --bg-modal-panel: rgba(255, 255, 255, 0.92);
   --border-glass: rgba(52, 199, 89, 0.12);
 
-  /* 抹茶绿交互与滚动条 */
+  /* 清新绿交互与滚动条 */
   --scrollbar-thumb: rgba(52, 199, 89, 0.15);
   --scrollbar-thumb-hover: rgba(52, 199, 89, 0.3);
   --focus-ring: rgba(52, 199, 89, 0.2);
