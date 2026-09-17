@@ -36,6 +36,13 @@ export default defineConfig({
           items: [
             { text: '快速开始', link: '/guide/quick-start' }
           ]
+        },
+        {
+          text: '深入了解',
+          collapsed: false,
+          items: [
+            { text: '架构与设计', link: '/guide/architecture' }
+          ]
         }
       ],
       '/config/': [

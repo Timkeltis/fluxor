@@ -358,9 +358,9 @@ const messages = {
     'about.core_version': '内核版本',
     'about.github': '开源仓库',
     'about.features': '技术特性',
-    'about.feature_1': '纯净高效：使用 Go 标准库与 Unix Socket 通信',
-    'about.feature_2': '现代前端：基于 Vue 3 + Tailwind CSS + Pinia 构建',
-    'about.feature_3': '特别鸣谢：由 DeepSeek & Gemini 协助开发'
+    'about.feature_1': '纯净高效：Go 后端仅 2 个外部依赖，经 Unix Socket 通信',
+    'about.feature_2': '现代前端：Vue 3 + Tailwind CSS 4 + Pinia 4 构建',
+    'about.feature_3': '特别鸣谢：DeepSeek 与 DeepSeek Harness'
   },
   en: {
     'common.loading': 'Loading...',
@@ -709,9 +709,9 @@ const messages = {
     'about.core_version': 'Kernel Version',
     'about.github': 'GitHub Repository',
     'about.features': 'Technical Features',
-    'about.feature_1': 'Pure & Fast: Go Standard Library & Unix Socket communication',
-    'about.feature_2': 'Modern UI: Powered by Vue 3, Tailwind CSS & Pinia',
-    'about.feature_3': 'Special thanks to DeepSeek & Gemini for coding assistance'
+    'about.feature_1': 'Lean & Fast: Go backend with only 2 external deps, over Unix Socket',
+    'about.feature_2': 'Modern UI: Built with Vue 3, Tailwind CSS 4 & Pinia 4',
+    'about.feature_3': 'Special thanks to DeepSeek & DeepSeek Harness'
   }
 }
 
