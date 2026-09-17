@@ -31,7 +31,7 @@ func getLatestCoreVersion() (string, error) {
 	coreCacheMutex.RUnlock()
 
 	url := "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
-	resp, err := http.Get(url)
+	resp, err := ghAPIClient.Get(url) // 带 15s 超时，避免无响应时挂死
 	if err != nil {
 		return "", err
 	}

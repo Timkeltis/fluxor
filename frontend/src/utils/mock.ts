@@ -102,6 +102,12 @@ let activeMockConns = [
   }
 ]
 
+// TProxy 状态模拟（与后端语义保持一致）
+let mockTproxyEnabled = false
+let mockTproxyProxyLocal = true
+let mockTproxyDstExceptions = ['# 公共 DNS 服务器', '223.5.5.5', '1.12.12.12']
+let mockTproxySrcExceptions = ['# Docker 默认网段', '172.17.0.0/16']
+
 // 模拟 HTTP API
 export function handleMockFetch(path: string, options: RequestInit = {}): Response {
   const method = (options.method || 'GET').toUpperCase()
@@ -115,6 +121,36 @@ export function handleMockFetch(path: string, options: RequestInit = {}): Respon
   if (cleanPath.endsWith('/core/stop')) { coreRunning = false; return reply({ status: 'ok' }) }
   if (cleanPath.endsWith('/restart') || cleanPath.endsWith('/core/restart')) return reply({ status: 'ok' })
   if (cleanPath.endsWith('/version')) return reply({ version: 'v1.18.8-meta' })
+
+  // TProxy：/config/tproxy/exceptions 与 /config/tproxy/proxy-local 路径更长，
+  // 必须先匹配，否则会被 /config/tproxy 的前缀判断吞掉
+  if (cleanPath.endsWith('/config/tproxy/exceptions')) {
+    if (method === 'POST') {
+      const body = JSON.parse(options.body as string || '{}')
+      mockTproxyDstExceptions = body.dst || []
+      mockTproxySrcExceptions = body.src || []
+    }
+    return reply({ dst: mockTproxyDstExceptions, src: mockTproxySrcExceptions })
+  }
+  if (cleanPath.endsWith('/config/tproxy/proxy-local')) {
+    if (method === 'POST') {
+      const body = JSON.parse(options.body as string || '{}')
+      mockTproxyProxyLocal = !!body.enabled
+    }
+    return reply({ enabled: mockTproxyProxyLocal })
+  }
+  if (cleanPath.endsWith('/config/tproxy')) {
+    if (method === 'POST') {
+      const body = JSON.parse(options.body as string || '{}')
+      const enable = !!body.enable
+      // 与后端一致：端口为 0 时拒绝启用（后端返回 400）
+      if (enable && (mockConfigs['tproxy-port'] || 0) === 0) {
+        return reply({ status: 'error', message: 'TProxy 端口为 0，请先配置端口' }, 400)
+      }
+      mockTproxyEnabled = enable
+    }
+    return reply({ enabled: mockTproxyEnabled })
+  }
 
   if (cleanPath.endsWith('/configs')) {
     if (method === 'PATCH' || method === 'PUT') {

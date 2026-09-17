@@ -7,6 +7,7 @@ import (
 	"fluxor/internal/httpx"
 	"fluxor/internal/tproxy"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -36,9 +37,14 @@ func HandleConfigsAPI(w http.ResponseWriter, r *http.Request) {
 		if err := json.Unmarshal(bodyBytes, &fields); err == nil {
 			if tpVal, ok := fields["tproxy-port"]; ok {
 				if tpPort, ok := tpVal.(float64); ok {
-					if tpPort > 0 {
+					// 仅在 TProxy 处于启用状态时才重建规则。
+					// 否则用户只要改一次端口，就会在开关为「关闭」的情况下
+					// 被静默装上系统级透明代理规则（与 ReloadCore 的判定保持一致）。
+					if tproxy.GetTproxyState() && tpPort > 0 {
 						tproxy.DisableTProxyRules()
-						tproxy.EnableTProxyRules(int(tpPort))
+						if err := tproxy.EnableTProxyRules(int(tpPort)); err != nil {
+							log.Printf("[TProxy] 端口变更后应用规则失败: %v", err)
+						}
 					} else {
 						tproxy.DisableTProxyRules()
 					}

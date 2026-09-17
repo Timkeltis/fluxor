@@ -3,63 +3,86 @@ package tproxy
 import (
 	"encoding/json"
 	"fluxor/internal/config"
-	"os"
-	"path/filepath"
+	"log"
 )
 
-// LoadTproxyDstExceptions 加载目的例外
+// fluxor.json 中由本包负责的字段。
+//
+// 这些字段与订阅配置共用同一个文件，因此写入一律通过 config.UpdateConfigFile
+// 走「读—改—写」，与 config.SaveSubscribeConfig 共用同一把文件锁（config.FileMu）。
+// 切勿在此直接 os.WriteFile 整个文件：那会把订阅配置字段抹掉。
+const (
+	keyTproxyEnabled       = "tproxy_enabled"
+	keyTproxyProxyLocal    = "tproxy_proxy_local"
+	keyTproxyDstExceptions = "tproxy_dst_exceptions"
+	keyTproxySrcExceptions = "tproxy_src_exceptions"
+	keyTproxyExceptionsOld = "tproxy_exceptions" // 旧字段，读取时迁移
+)
+
+// 默认例外列表（文件缺失或字段不存在时使用）
+func defaultDstExceptions() []string {
+	return []string{"# 公共 DNS 服务器", "223.5.5.5 #注释可单独一行也可写在规则后", "1.12.12.12", "# stun服务器", "141.101.90.1"}
+}
+
+func defaultSrcExceptions() []string {
+	return []string{"# Docker 默认网段", "172.17.0.0/16"}
+}
+
+// readStringSliceField 从配置文件的顶层映射中读取一个字符串数组字段。
+func readStringSliceField(full map[string]any, key string) ([]string, bool) {
+	raw, ok := full[key]
+	if !ok {
+		return nil, false
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, false
+	}
+	var out []string
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// LoadTproxyDstExceptions 加载目的例外，字段不存在时写入默认值
 func LoadTproxyDstExceptions() []string {
 	exceptionsMu.Lock()
 	defer exceptionsMu.Unlock()
-	data, err := os.ReadFile(config.FluxorConfigFile)
-	if err != nil {
-		return []string{"# 公共 DNS 服务器", "223.5.5.5 #注释可单独一行也可写在规则后", "1.12.12.12", "# stun服务器", "141.101.90.1"} // 默认值
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return []string{"# 公共 DNS 服务器", "223.5.5.5 #注释可单独一行也可写在规则后", "1.12.12.12", "# stun服务器", "141.101.90.1"}
-	}
-	// 尝试读取新字段 tproxy_dst_exceptions
-	if dstRaw, ok := raw["tproxy_dst_exceptions"]; ok {
-		var dst []string
-		if err := json.Unmarshal(dstRaw, &dst); err == nil {
+
+	full, err := config.ReadConfigFile()
+	if err == nil {
+		// 新字段优先
+		if dst, ok := readStringSliceField(full, keyTproxyDstExceptions); ok {
 			tproxyDstExceptionsCache = dst
 			return dst
 		}
-	}
-	// 回退到旧字段 tproxy_exceptions
-	if oldRaw, ok := raw["tproxy_exceptions"]; ok {
-		var old []string
-		if err := json.Unmarshal(oldRaw, &old); err == nil {
-			// 迁移到新字段
-			tproxyDstExceptionsCache = old
-			saveTproxyDstExceptionsLocked(old)
-			// 删除旧字段（可选）
-			delete(raw, "tproxy_exceptions")
-			return old
+		// 回退到旧字段并迁移
+		if dst, ok := readStringSliceField(full, keyTproxyExceptionsOld); ok {
+			tproxyDstExceptionsCache = dst
+			if err := saveDstExceptions(dst); err != nil {
+				log.Printf("[TProxy] 迁移目的例外失败: %v", err)
+			}
+			return dst
 		}
 	}
-	// 默认值
-	defaultDst := []string{"# 公共 DNS 服务器", "223.5.5.5 #注释可单独一行也可写在规则后", "1.12.12.12", "# stun服务器", "141.101.90.1"}
-	tproxyDstExceptionsCache = defaultDst
-	saveTproxyDstExceptionsLocked(defaultDst)
-	return defaultDst
+
+	// 文件缺失、损坏或字段不存在：落盘默认值，并同步缓存
+	// （此前该分支只 return 默认值而不设置缓存，会让面板读到空列表）
+	dst := defaultDstExceptions()
+	tproxyDstExceptionsCache = dst
+	if err := saveDstExceptions(dst); err != nil {
+		log.Printf("[TProxy] 写入默认目的例外失败: %v", err)
+	}
+	return dst
 }
 
-// saveTproxyDstExceptionsLocked 假定已持有锁
-func saveTproxyDstExceptionsLocked(dst []string) error {
-	data, err := os.ReadFile(config.FluxorConfigFile)
-	var full map[string]interface{}
-	if err == nil && len(data) > 0 {
-		json.Unmarshal(data, &full)
-	} else {
-		full = make(map[string]interface{})
-	}
-	full["tproxy_dst_exceptions"] = dst
-	// 删除旧字段（可选）
-	delete(full, "tproxy_exceptions")
-	newData, _ := json.MarshalIndent(full, "", "  ")
-	return os.WriteFile(config.FluxorConfigFile, newData, 0644)
+// saveDstExceptions 保存目的例外并移除旧字段。
+func saveDstExceptions(dst []string) error {
+	return config.UpdateConfigFile(func(full map[string]any) {
+		full[keyTproxyDstExceptions] = dst
+		delete(full, keyTproxyExceptionsOld)
+	})
 }
 
 // SaveTproxyDstExceptions 供外部调用（加锁）
@@ -67,53 +90,34 @@ func SaveTproxyDstExceptions(dst []string) error {
 	exceptionsMu.Lock()
 	defer exceptionsMu.Unlock()
 	tproxyDstExceptionsCache = dst
-	return saveTproxyDstExceptionsLocked(dst)
+	return saveDstExceptions(dst)
 }
 
-// loadTproxyDstExceptions 加载源例外
+// LoadTproxySrcExceptions 加载源例外，字段不存在时写入默认值
 func LoadTproxySrcExceptions() []string {
 	exceptionsMu.Lock()
 	defer exceptionsMu.Unlock()
-	data, err := os.ReadFile(config.FluxorConfigFile)
-	if err != nil {
-		// 文件不存在，创建默认
-		defaultSrc := []string{"# Docker 默认网段", "172.17.0.0/16"}
-		tproxySrcExceptionsCache = defaultSrc
-		saveTproxySrcExceptionsLocked(defaultSrc)
-		return defaultSrc
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		defaultSrc := []string{"# Docker 默认网段", "172.17.0.0/16"}
-		tproxySrcExceptionsCache = defaultSrc
-		saveTproxySrcExceptionsLocked(defaultSrc)
-		return defaultSrc
-	}
-	if srcRaw, ok := raw["tproxy_src_exceptions"]; ok {
-		var src []string
-		if err := json.Unmarshal(srcRaw, &src); err == nil {
+
+	full, err := config.ReadConfigFile()
+	if err == nil {
+		if src, ok := readStringSliceField(full, keyTproxySrcExceptions); ok {
 			tproxySrcExceptionsCache = src
 			return src
 		}
 	}
-	// 字段不存在，初始化默认
-	defaultSrc := []string{"# Docker 默认网段", "172.17.0.0/16"}
-	tproxySrcExceptionsCache = defaultSrc
-	saveTproxySrcExceptionsLocked(defaultSrc)
-	return defaultSrc
+
+	src := defaultSrcExceptions()
+	tproxySrcExceptionsCache = src
+	if err := saveSrcExceptions(src); err != nil {
+		log.Printf("[TProxy] 写入默认源例外失败: %v", err)
+	}
+	return src
 }
 
-func saveTproxySrcExceptionsLocked(src []string) error {
-	data, _ := os.ReadFile(config.FluxorConfigFile)
-	var full map[string]interface{}
-	if len(data) > 0 {
-		json.Unmarshal(data, &full)
-	} else {
-		full = make(map[string]interface{})
-	}
-	full["tproxy_src_exceptions"] = src
-	newData, _ := json.MarshalIndent(full, "", "  ")
-	return os.WriteFile(config.FluxorConfigFile, newData, 0644)
+func saveSrcExceptions(src []string) error {
+	return config.UpdateConfigFile(func(full map[string]any) {
+		full[keyTproxySrcExceptions] = src
+	})
 }
 
 // SaveTproxySrcExceptions 保存源例外列表（加锁），由 HTTP 层调用。
@@ -121,68 +125,36 @@ func SaveTproxySrcExceptions(src []string) error {
 	exceptionsMu.Lock()
 	defer exceptionsMu.Unlock()
 	tproxySrcExceptionsCache = src
-	return saveTproxySrcExceptionsLocked(src)
+	return saveSrcExceptions(src)
 }
 
-// LoadTproxyProxyLocal 从 fluxor.json 读取 tproxy_proxy_local 字段，默认 true
+// LoadTproxyProxyLocal 读取 tproxy_proxy_local 字段，默认 true
 func LoadTproxyProxyLocal() bool {
 	exceptionsMu.Lock()
 	defer exceptionsMu.Unlock()
 
-	data, err := os.ReadFile(config.FluxorConfigFile)
-	if err != nil {
-		// 文件不存在，默认开启并保存
-		tproxyProxyLocal = true
-		saveTproxyProxyLocalLocked(true)
-		return true
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		tproxyProxyLocal = true
-		saveTproxyProxyLocalLocked(true)
-		return true
-	}
-	var enabled bool
-	if val, ok := raw["tproxy_proxy_local"]; ok {
-		if err := json.Unmarshal(val, &enabled); err != nil {
-			tproxyProxyLocal = true
-			saveTproxyProxyLocalLocked(true)
-			return true
+	full, err := config.ReadConfigFile()
+	if err == nil {
+		if raw, ok := full[keyTproxyProxyLocal]; ok {
+			if enabled, ok := raw.(bool); ok {
+				tproxyProxyLocal = enabled
+				return enabled
+			}
 		}
-		tproxyProxyLocal = enabled
-		return enabled
 	}
-	// 字段不存在，默认 true，写入文件
+
+	// 缺失或类型异常：默认开启并落盘
 	tproxyProxyLocal = true
-	saveTproxyProxyLocalLocked(true)
+	if err := saveProxyLocal(true); err != nil {
+		log.Printf("[TProxy] 写入默认本机代理开关失败: %v", err)
+	}
 	return true
 }
 
-// saveTproxyProxyLocalLocked 假定已持有 exceptionsMu 锁
-func saveTproxyProxyLocalLocked(enabled bool) error {
-	// 读取完整配置
-	data, err := os.ReadFile(config.FluxorConfigFile)
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	var full map[string]interface{}
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &full); err != nil {
-			return err
-		}
-	} else {
-		full = make(map[string]interface{})
-	}
-	full["tproxy_proxy_local"] = enabled
-	dir := filepath.Dir(config.FluxorConfigFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-	newData, err := json.MarshalIndent(full, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(config.FluxorConfigFile, newData, 0644)
+func saveProxyLocal(enabled bool) error {
+	return config.UpdateConfigFile(func(full map[string]any) {
+		full[keyTproxyProxyLocal] = enabled
+	})
 }
 
 // SaveTproxyProxyLocal 外部调用，加锁并保存
@@ -190,5 +162,59 @@ func SaveTproxyProxyLocal(enabled bool) error {
 	exceptionsMu.Lock()
 	defer exceptionsMu.Unlock()
 	tproxyProxyLocal = enabled
-	return saveTproxyProxyLocalLocked(enabled)
+	return saveProxyLocal(enabled)
+}
+
+// LoadTproxyEnabled 读取持久化的 TProxy 开关状态。
+//
+// 仅供诊断/日志使用：实际生效状态由 ResetOnStartup 在冷启动时统一归零，
+// 因此本函数不会用于恢复运行状态。
+func LoadTproxyEnabled() bool {
+	full, err := config.ReadConfigFile()
+	if err != nil {
+		return false
+	}
+	raw, ok := full[keyTproxyEnabled]
+	if !ok {
+		return false
+	}
+	enabled, _ := raw.(bool)
+	return enabled
+}
+
+// persistTproxyEnabled 持久化开关状态。
+func persistTproxyEnabled(enabled bool) error {
+	return config.UpdateConfigFile(func(full map[string]any) {
+		full[keyTproxyEnabled] = enabled
+	})
+}
+
+// SetTproxyEnabled 设置内存中的开关状态并持久化，供 HTTP 层复用。
+func SetTproxyEnabled(enabled bool) {
+	tproxyMu.Lock()
+	tproxyEnableState = enabled
+	tproxyMu.Unlock()
+
+	if err := persistTproxyEnabled(enabled); err != nil {
+		log.Printf("[TProxy] 持久化开关状态失败: %v", err)
+	}
+}
+
+// ResetOnStartup 冷启动时的状态收敛。
+//
+// nftables 规则不跨重启存活，而开关状态是持久化的：若上一次是非优雅退出
+// （kill -9 / 崩溃），nft 规则可能仍然存在，此时磁盘上的开关却可能为「已关闭」，
+// 出现「面板显示关闭、流量实际仍被劫持」的静默错配。
+//
+// 因此在冷启动时无条件把状态归零，并清除任何残留规则，让内存态、磁盘态与
+// 内核态三者重新一致。用户需要 TProxy 时再手动开启。
+func ResetOnStartup() {
+	// 先清残留规则（不依赖当前布尔值，确保任何残留都被移除）
+	DisableTProxyRules()
+
+	SetTproxyEnabled(false)
+
+	if LoadTproxyEnabled() {
+		log.Printf("[TProxy] 上次为启用状态，已在冷启动时重置为关闭并清理残留规则")
+	}
 }

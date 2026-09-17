@@ -37,6 +37,11 @@ func HandleProviderProxies(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteJSONError(w, http.StatusBadRequest, "缺少代理名称")
 		return
 	}
+	// 该片段会被拼进内核路径，先排除穿越形态
+	if !validateCorePathSuffix(trimmed) {
+		httpx.WriteJSONError(w, http.StatusBadRequest, "无效的代理名称")
+		return
+	}
 	targetPath := "/providers/proxies/" + trimmed
 
 	// 拼接查询参数（用于 healthcheck）

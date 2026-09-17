@@ -1,6 +1,7 @@
 package tproxy
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"net"
@@ -8,6 +9,73 @@ import (
 	"strconv"
 	"strings"
 )
+
+// FWMARK / TABLE_ID 与 EnableTProxyRules 中写入策略路由时使用的取值一致。
+const (
+	tproxyFwmark  = "1"
+	tproxyTableID = "100"
+)
+
+// hasFwmarkRule 检测策略路由规则（fwmark 1 -> table 100）是否已存在。
+//
+// 先探测再删除，避免对不存在的规则执行 del 而徒增错误。
+func hasFwmarkRule() bool {
+	out, err := exec.Command("ip", "rule", "show").Output()
+	if err != nil {
+		return false
+	}
+	return matchFwmarkRule(string(out))
+}
+
+// matchFwmarkRule 解析 `ip rule show` 的输出，判断是否含目标策略路由。
+// 抽成纯函数以便单测覆盖，无需真实改动系统防火墙。
+func matchFwmarkRule(out string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, "fwmark") {
+			continue
+		}
+		if strings.Contains(line, "lookup "+tproxyTableID) || strings.Contains(line, "table "+tproxyTableID) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasLocalRoute 检测 table 100 中是否存在本地路由（local default dev lo）。
+//
+// table 不存在时 `ip route show table 100` 会以非零码退出，据此判定为无残留，
+// 不执行任何删除。
+func hasLocalRoute() bool {
+	out, err := exec.Command("ip", "route", "show", "table", tproxyTableID).Output()
+	if err != nil {
+		return false
+	}
+	return matchLocalRoute(string(out))
+}
+
+// matchLocalRoute 解析 `ip route show table 100` 的输出，判断是否含本地路由。
+func matchLocalRoute(out string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "local ") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasNftTable 检测 nftables 表是否已存在。
+//
+// `nft list table` 在表不存在时返回非零码；无权限时同样返回非零码，
+// 两种情况都会被视为「无残留」，此时删除也必然失败，跳过是正确行为。
+func hasNftTable() bool {
+	// nft 会把报错写到 stderr，这里丢弃以免污染日志
+	cmd := exec.Command("nft", "list", "table", "ip", tproxyNftTable)
+	cmd.Stderr = &bytes.Buffer{}
+	return cmd.Run() == nil
+}
+
+// tproxyNftTable 本模块使用的 nftables 表名。
+const tproxyNftTable = "fluxor_tproxy"
 
 // parseTproxyException 解析单条规则，返回 (ruleType, value, proto, port)
 // 支持：
@@ -175,24 +243,62 @@ func EnableTProxyRules(port int) error {
 		runCmd("nft", "add", "rule", "ip", "fluxor_tproxy", "nat_output", "tcp", "dport", "53", "redirect", "to", ":1053")
 	}
 
+	// 结果校验：上面各条命令的失败此前只写日志，导致面板在规则实际未生效时
+	// 仍显示「已启用」。这里以表是否真正建成作为判定依据——若 nft 不可用或
+	// 权限不足，表不存在，据此如实返回失败，由调用方决定是否回滚开关状态。
+	if !hasNftTable() {
+		return fmt.Errorf("nftables 表 %s 未建成，规则未生效（请确认 nft 可用且权限充足）", tproxyNftTable)
+	}
+
 	log.Printf("[TProxy] 规则应用成功（含目的/源例外及本机代理开关）")
 	return nil
 }
 
-// DisableTProxyRules 清理规则（仅当规则存在时才执行删除）
+// DisableTProxyRules 清理本模块写入的 nftables 表与策略路由。
+//
+// 关键点在于「各项独立探测、存在才删」：
+//
+// EnableTProxyRules 先写策略路由（ip rule / ip route）再建 nft 表。若建表失败
+// （nft 未安装、权限不足），就会出现「有策略路由、无 nft 表」的中间状态。
+// 此前实现把 ip 规则的清理放在「nft 表存在」的判定之后，导致这种情形下
+// 策略路由永远清不掉——流量被导入空的 table 100 → 持续断网。
+//
+// 因此每项资源各自探测：有残留才执行删除，既不会漏删（不再被 nft 表的
+// 存在性绑架），也不会对不存在的对象执行 del 而徒增错误。
+//
+// 幂等，可重复调用。
 func DisableTProxyRules() {
-	// 1. 检查 nftables 表 fluxor_tproxy 是否存在
-	checkCmd := exec.Command("nft", "list", "table", "ip", "fluxor_tproxy")
-	if err := checkCmd.Run(); err != nil {
-		// 表不存在，说明规则已清除，直接返回
-		return
+	removed := make([]string, 0, 3)
+
+	if hasNftTable() {
+		if err := exec.Command("nft", "delete", "table", "ip", tproxyNftTable).Run(); err != nil {
+			log.Printf("[TProxy] 删除 nftables 表失败: %v", err)
+		} else {
+			removed = append(removed, "nft 表")
+		}
 	}
 
-	// 表存在，执行清理
-	exec.Command("nft", "delete", "table", "ip", "fluxor_tproxy").Run()
-	exec.Command("ip", "rule", "del", "fwmark", "1", "table", "100").Run()
-	exec.Command("ip", "route", "del", "local", "0.0.0.0/0", "dev", "lo", "table", "100").Run()
-	log.Printf("[TProxy] nftables防火墙规则清理完成。")
+	if hasLocalRoute() {
+		if err := exec.Command("ip", "route", "del", "local", "0.0.0.0/0", "dev", "lo", "table", tproxyTableID).Run(); err != nil {
+			log.Printf("[TProxy] 删除策略路由失败: %v", err)
+		} else {
+			removed = append(removed, "策略路由")
+		}
+	}
+
+	if hasFwmarkRule() {
+		if err := exec.Command("ip", "rule", "del", "fwmark", tproxyFwmark, "table", tproxyTableID).Run(); err != nil {
+			log.Printf("[TProxy] 删除路由规则失败: %v", err)
+		} else {
+			removed = append(removed, "路由规则")
+		}
+	}
+
+	if len(removed) == 0 {
+		log.Printf("[TProxy] 未发现残留规则，无需清理")
+		return
+	}
+	log.Printf("[TProxy] 已清理: %s", strings.Join(removed, "、"))
 }
 
 // stripComment 去除行尾 # 注释，并 trim 空格，返回纯净的规则部分

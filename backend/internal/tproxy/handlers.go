@@ -8,40 +8,52 @@ import (
 	"net/http"
 )
 
-// HandleTproxyState 处理开关（保持不变，但 POST 时重新应用规则）
+// tproxyPort 读取当前生效的 TProxy 端口。
+func tproxyPort() int {
+	config.Mu.RLock()
+	defer config.Mu.RUnlock()
+	return config.Current.TproxyPort
+}
+
+// HandleTproxyState 处理 TProxy 开关状态：GET 查询，POST 切换。
 func HandleTproxyState(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		tproxyMu.RLock()
-		enabled := tproxyEnableState
-		tproxyMu.RUnlock()
-		httpx.RespondJSON(w, http.StatusOK, map[string]bool{"enabled": enabled})
+		httpx.RespondJSON(w, http.StatusOK, map[string]bool{"enabled": GetTproxyState()})
+
 	case http.MethodPost:
 		var req struct{ Enable bool }
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			httpx.WriteJSONError(w, http.StatusBadRequest, "无效的请求格式")
 			return
 		}
-		tproxyMu.Lock()
-		tproxyEnableState = req.Enable
-		tproxyMu.Unlock()
 
-		if req.Enable {
-			config.Mu.RLock()
-			port := config.Current.TproxyPort
-			config.Mu.RUnlock()
-			if port > 0 {
-				DisableTProxyRules() // 先清理
-				if err := EnableTProxyRules(port); err != nil {
-					log.Printf("[TProxy] 添加规则失败: %v", err)
-				}
-			} else {
-				log.Printf("[TProxy] 开关开启但端口为0，无法添加规则")
-			}
-		} else {
+		if !req.Enable {
 			DisableTProxyRules()
+			SetTproxyEnabled(false)
+			httpx.RespondJSON(w, http.StatusOK, map[string]bool{"enabled": false})
+			return
 		}
-		httpx.RespondJSON(w, http.StatusOK, map[string]bool{"enabled": req.Enable})
+
+		port := tproxyPort()
+		if port <= 0 {
+			// 端口为 0 时内核不会监听，规则必然无法生效；明确拒绝而不是
+			// 记一条日志后仍回报 enabled=true（那会让面板显示与实际不符）
+			httpx.WriteJSONError(w, http.StatusBadRequest, "TProxy 端口为 0，请先配置端口")
+			return
+		}
+
+		DisableTProxyRules() // 先清理，保证重复开启时幂等
+		if err := EnableTProxyRules(port); err != nil {
+			// 规则没装成功，状态必须回滚为关闭，避免「面板显示已启用、实际未生效」
+			SetTproxyEnabled(false)
+			log.Printf("[TProxy] 添加规则失败: %v", err)
+			httpx.WriteJSONError(w, http.StatusInternalServerError, "启用 TProxy 失败: "+err.Error())
+			return
+		}
+		SetTproxyEnabled(true)
+		httpx.RespondJSON(w, http.StatusOK, map[string]bool{"enabled": true})
+
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
@@ -77,14 +89,13 @@ func HandleTproxyExceptions(w http.ResponseWriter, r *http.Request) {
 			httpx.WriteJSONError(w, http.StatusInternalServerError, "保存源例外失败")
 			return
 		}
-		// 如果 TProxy 启用则重载
-		if tproxyEnableState {
-			config.Mu.RLock()
-			port := config.Current.TproxyPort
-			config.Mu.RUnlock()
-			if port > 0 {
+		// 如果 TProxy 启用则重载（经 GetTproxyState 读取，避免无锁访问）
+		if GetTproxyState() {
+			if port := tproxyPort(); port > 0 {
 				DisableTProxyRules()
-				EnableTProxyRules(port)
+				if err := EnableTProxyRules(port); err != nil {
+					log.Printf("[TProxy] 例外更新后重新应用规则失败: %v", err)
+				}
 			}
 		}
 		httpx.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -113,11 +124,8 @@ func HandleTproxyProxyLocal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 如果 TProxy 当前启用，立即重新应用规则
-		if tproxyEnableState {
-			config.Mu.RLock()
-			port := config.Current.TproxyPort
-			config.Mu.RUnlock()
-			if port > 0 {
+		if GetTproxyState() {
+			if port := tproxyPort(); port > 0 {
 				DisableTProxyRules()
 				if err := EnableTProxyRules(port); err != nil {
 					log.Printf("[TProxy] 重新应用规则失败: %v", err)

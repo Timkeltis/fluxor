@@ -18,7 +18,7 @@ func HandleLocalIPv4(w http.ResponseWriter, r *http.Request) {
 		"https://myip.ipip.net",
 		"https://ip.3322.net",
 	}
-	ip, err := fetchPublicIPWithFallback(urls, "")
+	ip, err := fetchPublicIPWithFallback(r.Context(), urls, "")
 	if err != nil {
 		// 回退到网卡获取的本机局域网 IP
 		if localIP, localErr := getLocalIPFromInterfaces(false); localErr == nil {
@@ -29,7 +29,7 @@ func HandleLocalIPv4(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// 获取地理信息
-	country, region, isp := fetchGeoInfo(ip)
+	country, region, isp := fetchGeoInfo(r.Context(), ip)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"ip":      ip,
@@ -51,7 +51,7 @@ func HandleLocalIPv6(w http.ResponseWriter, r *http.Request) {
 		"https://speed.neu6.edu.cn/getIP.php",
 		"https://api6.ipify.org?format=json",
 	}
-	ip, err := fetchPublicIPWithFallback(urls, "")
+	ip, err := fetchPublicIPWithFallback(r.Context(), urls, "")
 	if err != nil {
 		// 回退到网卡获取的本机全球单播 IPv6
 		if localIP, localErr := getLocalIPFromInterfaces(true); localErr == nil {
@@ -82,13 +82,13 @@ func HandleProxyIPv4(w http.ResponseWriter, r *http.Request) {
 		"https://ipv4.icanhazip.com",
 		"https://v4.ident.me",
 	}
-	ip, err := fetchPublicIPWithFallback(urls, proxyAddr)
+	ip, err := fetchPublicIPWithFallback(r.Context(), urls, proxyAddr)
 	if err != nil {
 		httpx.WriteJSONError(w, http.StatusServiceUnavailable, "获取代理 IPv4 失败: "+err.Error())
 		return
 	}
 	// 获取地理信息
-	country, region, isp := fetchGeoInfo(ip)
+	country, region, isp := fetchGeoInfo(r.Context(), ip)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"ip":      ip,
@@ -115,7 +115,7 @@ func HandleProxyIPv6(w http.ResponseWriter, r *http.Request) {
 		"https://ipv6.icanhazip.com",
 		"https://v6.ident.me",
 	}
-	ip, err := fetchPublicIPWithFallback(urls, proxyAddr)
+	ip, err := fetchPublicIPWithFallback(r.Context(), urls, proxyAddr)
 	if err != nil {
 		httpx.WriteJSONError(w, http.StatusServiceUnavailable, "获取代理 IPv6 失败: "+err.Error())
 		return

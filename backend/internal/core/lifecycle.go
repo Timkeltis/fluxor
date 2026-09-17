@@ -70,11 +70,51 @@ func IsCoreRunning() bool {
 	if err != nil {
 		return false
 	}
+	return corePidAlive(pid)
+}
+
+// corePidAlive 判断 pid 是否存活，且确实是内核进程。
+//
+// 仅判断「PID 存在」是不够的：内核异常退出后 PID 文件会残留，而 PID 可能已被
+// 复用给无关进程；此时 StopCore 会把 SIGTERM/SIGKILL 发给那个无关进程。
+// 因此额外比对 /proc/<pid>/exe 的文件名。
+func corePidAlive(pid int) bool {
 	process, err := os.FindProcess(pid)
 	if err != nil {
 		return false
 	}
-	return process.Signal(syscall.Signal(0)) == nil
+	if process.Signal(syscall.Signal(0)) != nil {
+		return false
+	}
+	return pidLooksLikeCore(pid)
+}
+
+// pidLooksLikeCore 比对 /proc/<pid>/exe 的文件名是否与内核二进制一致。
+//
+// 判定细节：
+//   - /proc/<pid>/exe 已被内核解析为真实可执行文件，因此当 CoreBin 是符号链接
+//     或经软链配置时，必须把两侧都解析到真实路径再比，否则会误判为「不是内核」，
+//     进而在内核明明在运行时报告「已停止」、并重复拉起第二个实例。
+//   - 自更新会替换二进制，使运行中进程的 exe 指向被删除的旧 inode，
+//     Readlink 会带 " (deleted)" 后缀，需要剥掉后再比。
+//   - 只比文件名而非完整路径：路径可能因启动方式不同而不同（相对路径、
+//     经 PATH 查找等），文件名比对已足以区分「是不是我们的内核」。
+//
+// 读取失败时（无 /proc、无权限、非 Linux）返回 true，退回「仅看 PID 存活」，
+// 以免在受限环境下把正在运行的内核误判为未运行。
+func pidLooksLikeCore(pid int) bool {
+	exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	if err != nil {
+		return true
+	}
+	exe = strings.TrimSuffix(exe, " (deleted)")
+
+	want := config.CoreBin
+	// 两侧统一解析软链，保证 symlink 配置下仍能匹配
+	if resolved, err := filepath.EvalSymlinks(want); err == nil {
+		want = resolved
+	}
+	return filepath.Base(exe) == filepath.Base(want)
 }
 
 // StartCore 启动内核进程
@@ -169,8 +209,13 @@ func StopCore() error {
 	// 轮询检查进程是否退出（最大 5 秒超时，每 100ms 一次）
 	killed := false
 	for i := 0; i < 50; i++ {
-		err := process.Signal(syscall.Signal(0))
-		if err != nil {
+		if process.Signal(syscall.Signal(0)) != nil {
+			killed = true
+			break
+		}
+		// PID 已被复用给无关进程时，绝不能再发 SIGKILL：那会误杀该进程。
+		// 此时视为原内核已退出，转而清理残留文件。
+		if !pidLooksLikeCore(pid) {
 			killed = true
 			break
 		}
@@ -178,7 +223,7 @@ func StopCore() error {
 	}
 
 	if !killed {
-		// 超时则发送 SIGKILL 强杀
+		// 超时则发送 SIGKILL 强杀（此时已确认仍是我们启动的内核）
 		process.Signal(syscall.SIGKILL)
 		time.Sleep(200 * time.Millisecond)
 	}

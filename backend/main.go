@@ -142,6 +142,11 @@ func main() {
 	tproxy.LoadTproxySrcExceptions()
 	tproxy.LoadTproxyDstExceptions()
 	tproxy.LoadTproxyProxyLocal()
+	// 冷启动收敛：把开关状态归零并清除可能残留的 nft/策略路由规则，
+	// 避免上次非优雅退出后出现「面板显示关闭、流量仍被劫持」的错配。
+	tproxy.ResetOnStartup()
+	// 清理上次非优雅退出遗留的临时内核进程与临时文件
+	core.CleanupStaleTempCores()
 
 	if _, err := os.Stat(config.ConfigTarget); os.IsNotExist(err) {
 		if err := configgen.GenerateConfig(config.Current); err != nil {
@@ -195,7 +200,9 @@ func main() {
 		}
 		defer listener.Close()
 
-		if err := os.Chmod(config.SocketPath, 0666); err != nil {
+		// 0660：仅属主与所属组可读写，收窄此前 0666（任意本地用户均可
+		// 通过该 socket 全权操作内核）。
+		if err := os.Chmod(config.SocketPath, 0660); err != nil {
 			fmt.Printf("设置 socket 权限失败: %v\n", err)
 		}
 		fmt.Printf("Unix socket 监听: %s\n", config.SocketPath)

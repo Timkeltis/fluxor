@@ -84,8 +84,9 @@ backend/
     │   ├── state.go              #   Current（当前配置快照）+ Mu（读写锁）
     │   ├── paths.go              #   全部运行路径（Socket/PID/内核/面板/日志等）
     │   ├── modes.go              #   fnos / openwrt 两套默认路径
-    │   ├── env.go                #   环境变量读取工具
+    │   ├── name.go               #   订阅名校验与节点文件名清洗（防路径穿越）
     │   └── load.go               #   配置加载、默认值补齐、持久化
+    │                             #     + FileMu / UpdateConfigFile：fluxor.json 的共用文件锁与「读—改—写」
     ├── configgen/                # 【基础层】config.yaml 模板 + YAML 结构化改写
     │   ├── generator.go          #   GenerateConfig / GenerateBaseConfig
     │   ├── template_base.go      #   基础字段骨架
@@ -105,48 +106,53 @@ backend/
     │   └── document.go           #   Doc：保留键序/注释的顶层字段读写与序列化
     ├── core/                     # 内核进程生命周期
     │   ├── client.go             #   CoreRequest + cancelableReadCloser（Context 回收）
-    │   ├── lifecycle.go          #   启动/停止/热重载（重载后同步 TProxy 规则）
+    │   ├── lifecycle.go          #   启动/停止/热重载（含内核 PID 身份校验）
     │   ├── logger.go             #   内核操作日志记录器
     │   ├── tmpcore.go            #   DownloadWithTempCore：临时内核下载订阅节点文件
+    │   │                         #     + CleanupStaleTempCores：启动清理残留临时内核
     │   └── handlers.go           #   /core/* HTTP 接口
     ├── tproxy/                   # TProxy 防火墙与策略路由
-    │   ├── state.go              #   启用状态、例外缓存、读写锁
-    │   ├── store.go              #   例外列表/本机代理开关的持久化
+    │   ├── state.go              #   启用状态、例外缓存、读写锁（读一律走 GetTproxyState）
+    │   ├── store.go              #   开关状态/例外列表/本机代理开关的持久化
+    │   │                         #     + ResetOnStartup：冷启动归零开关并清理残留规则
     │   ├── rules.go              #   规则解析 + nftables 应用/清理
     │   └── handlers.go           #   /config/tproxy* HTTP 接口
     ├── subscription/             # 订阅中心
+    │   ├── doc.go                #   包说明
+    │   ├── active.go             #   校验 active_subscription 是否为列表真实成员
     │   ├── api.go                #   /subscribe/config 读写
     │   ├── api_generate.go       #   /subscribe/generate
     │   ├── api_update.go         #   /subscribe/update/{name}
     │   ├── api_updateinfo.go     #   /subscribe/update-info/{name}
     │   ├── patch.go              #   向节点文件注入端口/密钥/DNS（YAML 结构化改写）
     │   ├── ensure.go             #   切换模式下确保订阅文件就绪
-    │   ├── update.go             #   切换模式下的单个订阅更新流程
+    │   ├── update.go             #   切换模式下的单个订阅更新（锁内取快照 → 锁外下载 → 锁内写回）
     │   ├── metadata.go           #   元数据抓取与键规范化
     │   ├── timers.go             #   定时更新/健康检查定时器生命周期
     │   ├── healthcheck.go        #   switch 模式下激活订阅的周期测速
     │   ├── panel.go              #   MetaCubeXD config.js 后端地址改写
     │   ├── fileutil.go           #   文件复制工具
-    │   └── download/             #   【叶子】订阅下载层
-    │       ├── download.go       #     直连优先、临时内核回退
+    │   └── download/             #   订阅下载层（注意：非叶子包，会调用 core.DownloadWithTempCore）
+    │       ├── download.go       #     直连优先、临时内核回退（两阶段各 15s 上限，不重试）
     │       ├── direct.go         #     直接 HTTP 下载（仅收 Clash 明文 YAML）+ userinfo 头解析
     │       ├── validate.go       #     直连内容校验（委托 configcheck 做字段级校验）
     │       └── keys.go           #     map 键小写规范化
     ├── dashapi/                  # 内核 HTTP API 反向代理
-    │   ├── dashboard.go          #   版本/流量/内存/连接
+    │   ├── dashboard.go          #   /version 版本接口
     │   ├── configs.go            #   配置读写、重载、GEO、缓存、DNS 查询
     │   ├── proxies.go            #   代理组、单节点测速、策略组测速
     │   ├── providers.go          #   订阅代理信息
     │   ├── rules.go              #   规则与规则提供商
     │   ├── connections.go        #   连接断开
+    │   ├── pathparam.go          #   拼入内核路径的片段校验（防穿越）
     │   └── upgrade.go            #   内核升级
     ├── wsproxy/                  # WebSocket 双向桥接
     │   ├── handler.go            #   WsProxyHandler
     │   └── upgrader.go           #   全局 upgrader 配置
     ├── netinfo/                  # 网络信息查询
     │   ├── interfaces.go         #   网卡枚举 + 本地出口 IP 回退
-    │   ├── iplookup.go           #   公网 IP 查询（JSON/纯文本兼容）
-    │   ├── geo.go                #   IP 归属地查询（10 分钟缓存）
+    │   ├── iplookup.go           #   公网 IP 查询（JSON/纯文本兼容）+ newLookupClient
+    │   ├── geo.go                #   IP 归属地查询（10 分钟缓存，条目数有上限）
     │   ├── proxyport.go          #   从内核配置读取实际代理端口
     │   ├── addr.go               #   TCP 监听地址校验
     │   └── handlers.go           #   /ipinfo/* 与 /interfaces
@@ -286,6 +292,39 @@ func (c *cancelableReadCloser) Close() error {
 为了保障系统网络安全，在调用系统防火墙（如 `nft`）时必须遵循以下规则：
 1. **防止命令注入**：严禁采用拼接 shell 字符串并使用 `sh -c` 的方式执行。必须使用 `exec.Command` 原生多参数切片传参，并在后台通过 `runCmd` 限制外部参数注入（特别是针对例外 IP/CIDR 等由用户表单输入的配置项）。
 2. **退出彻底清退**：在面板退出时（通过监听 `syscall.SIGINT` 和 `syscall.SIGTERM` 信号），必须在退出前调用 `tproxy.DisableTProxyRules` 以清除所有已应用的网络重定向规则，以避免断网残留。
+3. **冷启动收敛**：nft 规则不跨重启存活，而开关状态是持久化的。启动时必须调用 `tproxy.ResetOnStartup()`：把开关无条件归零并清除任何残留规则，让内存态、磁盘态与内核态三者一致。否则上次非优雅退出（kill -9 / 崩溃）会留下「面板显示关闭、流量仍被劫持」的静默错配。
+4. **清理：各项独立探测、存在才删**：`DisableTProxyRules` 不得把策略路由的清理绑在「nft 表存在」的判定之后。`EnableTProxyRules` 先写策略路由（`ip rule` / `ip route`）再建 nft 表，若建表失败就会留下「有策略路由、无 nft 表」的状态；此时若因表不存在而提前返回，策略路由将永远清不掉，把流量导入空路由表 → 持续断网。正确做法是对 nft 表、`fwmark` 规则、`local` 路由**各自探测**（`hasNftTable` / `hasFwmarkRule` / `hasLocalRoute`），**有残留才执行对应删除**——既不漏删，也不对不存在的对象执行 del 而徒增错误。
+5. **状态读写的单一入口**：读取开关状态一律走 `GetTproxyState()`，写入走 `SetTproxyEnabled()`（内存 + 持久化）。禁止直接访问 `tproxyEnableState`——无锁读会构成数据竞争。
+6. **失败必须回滚且如实上报**：`EnableTProxyRules` 以「nft 表是否真正建成」作为成功判据并返回 error；Handler 在失败时回滚开关状态并返回错误，绝不回报 `enabled: true`。同理，改 `tproxy-port` 时只有在开关处于启用态才能重建规则，否则会在开关为「关闭」时被静默装上系统级透明代理规则。
+
+### 3.5 配置文件并发写入规约（`fluxor.json`）
+
+`fluxor.json` **同时承载订阅配置**（`config.SubscribeConfig`）**与 TProxy 旁路字段**（`tproxy_enabled` / `tproxy_dst_exceptions` / `tproxy_src_exceptions` / `tproxy_proxy_local`），由 `config` 与 `tproxy` 两个包分别写入。因此：
+
+1. **必须共用同一把文件锁**：所有对该文件的读写都要经 `config.FileMu`（经 `config.UpdateConfigFile` / `config.ReadConfigFile`）。
+2. **必须用「读—改—写」**：严禁任何一方整文件覆写。`SaveSubscribeConfig` 只合并 `SubscribeConfig` 自身的键，未触碰的键一律保留——否则保存一次订阅配置就会把 TProxy 例外列表静默清空。
+3. **锁序**：`FileMu` 永远是最内层。持有 `config.Mu` 或 `exceptionsMu` 时可以再取 `FileMu`，反之不可。
+4. **不要在持锁期间做网络 IO**：`config.Mu` 只用于内存字段赋值；抓取订阅元数据等耗时操作必须在锁外完成，锁内仅做写回。
+
+### 3.6 定时器生命周期规约
+
+定时器（尤其 `subscription` 的健康检查/更新定时器）必须遵守：
+
+1. **goroutine 只能捕获局部变量**：绝不能让常驻 goroutine 读取会被置 `nil` 的包级句柄。`select` 每轮都会重新求值 `case` 表达式，一旦读到 `nil *time.Ticker` 就是对 nil 解引用；该 goroutine 没有 `recover`，会**直接终止整个进程**。正确做法是把 `ticker` / `stop` 先落到局部变量再由闭包按值捕获。
+2. **停止必须幂等**：重复 stop 不得 `close` 已关闭的 channel。启停整体由专用互斥锁（`healthCheckLifecycleMu`）串行化。
+3. **禁止在持锁期间启动定时器**：`StartAllTimers` 必须先取快照再释放 `config.Mu`。Go 的 `RWMutex` 在有写者排队时会阻塞新的读锁，因此「持读锁 → 调用内部会再次取读锁的函数」会形成死锁（内层等写者、写者等外层）。
+4. **向可能被置 nil 的 map 写入前要判空**：`performHealthChecks` 执行期间定时器可能已被 stop（`lastHealthCheck` 被置 nil），写入前必须复查。
+
+### 3.7 订阅下载的超时与重试规约
+
+订阅下载链路为「直连 HTTP → 失败则回退临时内核」两阶段，统一遵守：
+
+1. **各阶段超时均为 15 秒**：`download/direct.go` 的 `directDownloadTimeout` 与 `core/tmpcore.go` 的 `tempCoreTimeout` 都是 15s。
+2. **一律不重试**：直连失败只请求一次；临时内核失败也只启动一次。不得在下载路径重新引入重试循环——此前为「60s × 3 次重试」，单次更新最长可拖到 3 分钟。
+3. **15 秒是端到端上限**：临时内核路径中，「等待文件产出」与「抓取元数据」共用一个截止时间（`deadline`），元数据请求取剩余预算作为超时，不额外叠加。
+4. **进程回收必须有界**：清理临时内核时的 `cmd.Wait()` 等待必须加上限。它的 stdout 拷贝 goroutine 可能因子进程继续持有管道写端而长期不返回，无界等待会突破 15s 上限甚至永久阻塞。
+
+> 两阶段的 15 秒是**串行**的：最坏情况（直连超时后再回退临时内核并超时）单次更新约 30 秒。这是刻意的取舍——回退机制本身要保留，但每一段都不再各自放大 3 倍。
 
 ---
 

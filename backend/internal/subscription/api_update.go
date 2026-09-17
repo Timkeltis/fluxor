@@ -98,10 +98,14 @@ func HandleSubscribeUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	} else {
 		// 切换模式：启动HTTP下载或临时内核下载
-		var needsReload bool
-		var err2 error
-		config.Mu.Lock()
-		needsReload, err2 = updateSubscriptionInSwitchMode(&config.Current, name)
+		//
+		// 注意：此处【不能】持有 config.Mu——updateSubscriptionInSwitchMode 内部
+		// 会发起最长数十秒的网络下载，而 config.Mu 被 core.CoreRequest、wsproxy、
+		// quality、tproxy 等 10 处读取点共用，持锁下载会把整个面板阻塞住。
+		needsReload, err2 := updateSubscriptionInSwitchMode(name)
+
+		// 在锁内读取供响应使用的目标订阅元数据
+		config.Mu.RLock()
 		for _, s := range config.Current.Subscriptions {
 			if s.Name == name {
 				targetSub = s
@@ -109,7 +113,7 @@ func HandleSubscribeUpdate(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
-		config.Mu.Unlock()
+		config.Mu.RUnlock()
 
 		if err2 != nil {
 			httpx.WriteJSONError(w, http.StatusInternalServerError, "更新失败: "+err2.Error())

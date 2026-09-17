@@ -159,7 +159,11 @@ func unescapeAstral(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := 0; i < len(s); i++ {
-		if s[i] != '\\' || i+8 >= len(s) || s[i+1] != 'U' {
+		// \U0001F680 共 10 字节，下面要切 s[i+2:i+10]，故必须保证 i+10 <= len(s)。
+		// 此前守卫写作 i+8 >= len(s)（比切片上界少 2 字节），当 \U 序列紧贴文本
+		// 末尾时 s[i+2:i+10] 会越界 panic；而调用方（订阅下载、配置生成的
+		// goroutine）没有 recover，会直接终止整个进程。
+		if s[i] != '\\' || i+10 > len(s) || s[i+1] != 'U' {
 			b.WriteByte(s[i])
 			continue
 		}

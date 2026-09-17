@@ -50,7 +50,7 @@ func HandleUpdateRuleProvider(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.EscapedPath()
 	// 使用 baseURL + "/providers/rules/" 作为前缀
 	trimmed := strings.TrimPrefix(path, config.BaseURL+"/providers/rules/")
-	if trimmed == "" || strings.Contains(trimmed, "/") {
+	if !validateSinglePathSegment(trimmed) {
 		httpx.WriteJSONError(w, http.StatusBadRequest, "无效的提供商名称")
 		return
 	}

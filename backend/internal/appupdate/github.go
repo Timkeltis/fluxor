@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+// ghAPIClient GitHub API 专用客户端。
+//
+// 不能用 http.DefaultClient：它没有超时，GitHub 无响应时请求会一直挂到
+// TCP 层超时，而这些调用都发生在 HTTP handler 内。
+var ghAPIClient = &http.Client{Timeout: 15 * time.Second}
+
 type githubRelease struct {
 	TagName string `json:"tag_name"`
 	Body    string `json:"body"`
@@ -38,7 +44,7 @@ func getLatestAlphaCoreHash() (string, error) {
 
 	// 获取 Prerelease-Alpha tag 的 commit SHA
 	url := "https://api.github.com/repos/MetaCubeX/mihomo/git/refs/tags/Prerelease-Alpha"
-	resp, err := http.Get(url)
+	resp, err := ghAPIClient.Get(url)
 	if err != nil {
 		return "", err
 	}
@@ -83,7 +89,7 @@ func getLatestVersion() (string, error) {
 	cacheMutex.RUnlock()
 
 	url := "https://api.github.com/repos/shuangji66/fluxor/releases/latest"
-	resp, err := http.Get(url)
+	resp, err := ghAPIClient.Get(url)
 	if err != nil {
 		return "", err
 	}
@@ -150,7 +156,7 @@ func getLatestReleaseInfo() (*githubRelease, error) {
 	releaseCacheMutex.RUnlock()
 
 	apiURL := "https://api.github.com/repos/shuangji66/fluxor/releases/latest"
-	resp, err := http.Get(apiURL)
+	resp, err := ghAPIClient.Get(apiURL)
 	if err != nil {
 		return nil, err
 	}

@@ -42,6 +42,10 @@ func HandleProxyDelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proxyName := parts[0]
+	if !validateSinglePathSegment(proxyName) {
+		httpx.WriteJSONError(w, http.StatusBadRequest, "无效的代理名称")
+		return
+	}
 	targetPath := "/proxies/" + proxyName + "/delay?" + r.URL.RawQuery
 	resp, err := core.CoreRequest("GET", targetPath, nil)
 	if err != nil {
@@ -61,7 +65,7 @@ func HandleProxySwitch(w http.ResponseWriter, r *http.Request) {
 	}
 	path := r.URL.EscapedPath()
 	trimmed := strings.TrimPrefix(path, config.BaseURL+"/proxies/")
-	if trimmed == "" || strings.Contains(trimmed, "/") {
+	if !validateSinglePathSegment(trimmed) {
 		httpx.WriteJSONError(w, http.StatusBadRequest, "无效的代理名称")
 		return
 	}
@@ -98,6 +102,10 @@ func HandleGroupDelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	groupName := parts[0]
+	if !validateSinglePathSegment(groupName) {
+		httpx.WriteJSONError(w, http.StatusBadRequest, "无效的策略组名称")
+		return
+	}
 	// 构建目标路径，附带原始查询参数
 	targetPath := "/group/" + groupName + "/delay?" + r.URL.RawQuery
 	resp, err := core.CoreRequest("GET", targetPath, nil)

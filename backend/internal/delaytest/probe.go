@@ -1,6 +1,7 @@
 package delaytest
 
 import (
+	"context"
 	"fluxor/internal/netinfo"
 	"fmt"
 	"net/http"
@@ -8,8 +9,11 @@ import (
 	"time"
 )
 
-// testDelayThroughProxy 通过代理测试目标URL的延迟（HEAD请求），返回毫秒
-func testDelayThroughProxy(targetURL string, timeout time.Duration) (int, error) {
+// testDelayThroughProxy 通过代理测试目标URL的延迟（HEAD请求），返回毫秒。
+//
+// ctx 为发起请求的 HTTP 请求上下文：客户端断开时立即放弃探测，
+// 避免请求已无人接收却仍占用 goroutine 与代理连接。
+func testDelayThroughProxy(ctx context.Context, targetURL string, timeout time.Duration) (int, error) {
 	proxyPort := netinfo.GetProxyPortFromConfig()
 	if proxyPort == 0 {
 		return 0, fmt.Errorf("no proxy port available")
@@ -28,7 +32,7 @@ func testDelayThroughProxy(targetURL string, timeout time.Duration) (int, error)
 			return http.ErrUseLastResponse
 		},
 	}
-	req, err := http.NewRequest("HEAD", targetURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "HEAD", targetURL, nil)
 	if err != nil {
 		return 0, err
 	}

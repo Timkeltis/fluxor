@@ -22,6 +22,12 @@ func HandleConnectionsClose(w http.ResponseWriter, r *http.Request) {
 		id = strings.TrimPrefix(path, "/")
 	}
 
+	// id 会被拼进内核路径，必须先排除穿越形态（如 %2e%2e%2f 会被解码为 ".."）
+	if id != "" && !validateCorePathSuffix(id) {
+		httpx.WriteJSONError(w, http.StatusBadRequest, "无效的连接 ID")
+		return
+	}
+
 	var targetPath string
 	if id != "" {
 		targetPath = "/connections/" + id

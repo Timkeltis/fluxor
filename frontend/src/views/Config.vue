@@ -198,17 +198,41 @@ const savePorts = async (e?: Event) => {
   })
 }
 
-const saveTun = (e?: Event) => {
+const saveTun = async (e?: Event) => {
   if (e && e.type === 'keyup' && e.target instanceof HTMLElement) {
     e.target.blur()
     return
   }
   const isTunEnabled = configs.value.tun.enable
-  // 互斥：如果开启了 TUN，自动关闭 TProxy（只关开关，不改端口）
-  if (isTunEnabled) {
-    configStore.tproxyEnabled = false
+  // 互斥：开启 TUN 时自动关闭 TProxy。
+  //
+  // 必须先关 TProxy 再开 TUN，且必须调用后端：后端仍会把 TProxy 判定为启用，
+  // 只改本地开关会让「TProxy 例外列表弹窗禁用」「端口只读」等逻辑基于错误状态
+  // 工作（此前正是如此）。先关后开也避免两者同时生效的窗口。
+  if (isTunEnabled && configStore.tproxyEnabled) {
+    await disableTproxyOnBackend()
   }
-  patchConfig({ tun: configs.value.tun })
+  await patchConfig({ tun: configs.value.tun })
+}
+
+// disableTproxyOnBackend 通知后端关闭 TProxy，并同步本地开关。
+// 后端会把开关状态落盘，因此这里以服务端返回值为准。
+const disableTproxyOnBackend = async () => {
+  try {
+    const resp = await apiFetch('/config/tproxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enable: false })
+    })
+    if (!resp.ok) {
+      globalStore.showToast(t('common.operation_failed'), 'error')
+    }
+  } catch (e) {
+    globalStore.showToast(`${t('common.error')}: ${(e as Error).message}`, 'error')
+  } finally {
+    // 无论成败都以后端实际状态为准，避免本地与后端不一致
+    await configStore.refreshTproxyState()
+  }
 }
 
 const toggleTProxy = async (enable: boolean) => {
@@ -228,13 +252,30 @@ const toggleTProxy = async (enable: boolean) => {
   }
 
   // 调用后端更新状态（不涉及端口）
-  await apiFetch('/config/tproxy', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enable })
-  })
-  // 刷新状态
-  await configStore.refreshTproxyState()
+  //
+  // 后端在规则安装失败或端口为 0 时会拒绝请求并回滚开关状态，
+  // 因此这里必须检查响应，把失败原因反馈给用户，并统一以服务端状态为准，
+  // 避免出现「界面显示已启用、实际规则未生效」的静默错配。
+  try {
+    const resp = await apiFetch('/config/tproxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enable })
+    })
+    if (!resp.ok) {
+      let msg = t('common.operation_failed')
+      try {
+        const data = await resp.json()
+        if (data.message) msg = data.message
+      } catch (_) {}
+      globalStore.showToast(msg, 'error')
+    }
+  } catch (e) {
+    globalStore.showToast(`${t('common.error')}: ${(e as Error).message}`, 'error')
+  } finally {
+    // 刷新状态（以服务端返回值为准，失败时即完成回滚）
+    await configStore.refreshTproxyState()
+  }
 }
 
 // 内核进程管理

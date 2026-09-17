@@ -18,12 +18,15 @@ func init() {
 	timerCancel = make(map[string]context.CancelFunc)
 }
 
-// startSubscriptionTimer 为指定订阅启动定时更新（仅切换模式）
-func startSubscriptionTimer(cfg *config.SubscribeConfig, idx int) {
-	if cfg.Mode != "switch" {
+// startSubscriptionTimer 为指定订阅启动定时更新。
+//
+// 接收订阅快照与下标（而非 *config.SubscribeConfig + 全局锁），
+// 调用方 StartAllTimers 负责在锁内取好快照并判定 mode == "switch"。
+func startSubscriptionTimer(subs []config.Subscription, idx int) {
+	if idx < 0 || idx >= len(subs) {
 		return
 	}
-	sub := cfg.Subscriptions[idx]
+	sub := subs[idx]
 	if sub.UpdateInterval <= 0 {
 		return
 	}
@@ -48,29 +51,28 @@ func startSubscriptionTimer(cfg *config.SubscribeConfig, idx int) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				// 执行更新（需要获取锁）
-				var needsReload bool
-				var err error
-				config.Mu.Lock()
-				// 检查模式是否仍然为 switch 且订阅仍存在
+				// 先在锁内做前置判断（模式仍为 switch、订阅仍存在），随即放锁。
+				// updateSubscriptionInSwitchMode 会发起最长数十秒的网络下载，
+				// 绝不能持 config.Mu 调用它——该锁被 core.CoreRequest、wsproxy、
+				// quality、tproxy 等 10 处读取点共用，持锁下载会阻塞整个面板。
+				config.Mu.RLock()
 				if config.Current.Mode != "switch" {
-					config.Mu.Unlock()
+					config.Mu.RUnlock()
 					return
 				}
-				// 查找订阅索引
-				var idxFound int = -1
-				for i, s := range config.Current.Subscriptions {
-					if s.Name == name {
-						idxFound = i
+				found := false
+				for i := range config.Current.Subscriptions {
+					if config.Current.Subscriptions[i].Name == name {
+						found = true
 						break
 					}
 				}
-				if idxFound == -1 {
-					config.Mu.Unlock()
+				config.Mu.RUnlock()
+				if !found {
 					return
 				}
-				needsReload, err = updateSubscriptionInSwitchMode(&config.Current, name)
-				config.Mu.Unlock()
+
+				needsReload, err := updateSubscriptionInSwitchMode(name)
 				// 执行更新
 				if err != nil {
 					log.Printf("定时更新订阅 %s 失败: %v", name, err)
@@ -92,15 +94,24 @@ func startSubscriptionTimer(cfg *config.SubscribeConfig, idx int) {
 // StartAllTimers 按当前模式启动所有定时任务：
 // switch 模式下为每个订阅启动更新定时器，并额外启动健康检查定时器。
 func StartAllTimers() {
+	// 先取快照再释放锁：startSubscriptionTimer / startHealthCheckTimer 会获取
+	// 其它锁，若在此持锁调用，就与并发的保存请求形成「读锁重入 + 排队写者」的
+	// 死锁——Go 的 RWMutex 在有写者排队时会阻塞新的读锁，于是内层 RLock 永久
+	// 等待外层释放，而外层又在等内层返回。
 	config.Mu.RLock()
-	defer config.Mu.RUnlock()
-	if config.Current.Mode != "switch" {
+	mode := config.Current.Mode
+	activeSub := config.Current.ActiveSubscription
+	subs := make([]config.Subscription, len(config.Current.Subscriptions))
+	copy(subs, config.Current.Subscriptions)
+	config.Mu.RUnlock()
+
+	if mode != "switch" {
 		return
 	}
-	for i := range config.Current.Subscriptions {
-		startSubscriptionTimer(&config.Current, i)
+	for i := range subs {
+		startSubscriptionTimer(subs, i)
 	}
-	startHealthCheckTimer()
+	startHealthCheckTimer(activeSub)
 }
 
 // StopAllTimers 停止所有定时器

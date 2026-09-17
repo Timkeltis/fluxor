@@ -9,6 +9,7 @@ upx-ucl
 .gomod
 .gopath
 .gocache
+geo*
 mihomo
 
 # Makefile 增量构建标记

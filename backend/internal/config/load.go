@@ -5,7 +5,72 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 )
+
+// FileMu 保护 FluxorConfigFile 的整文件读—改—写。
+//
+// fluxor.json 同时承载订阅配置（本包的 Current）与 TProxy 相关字段
+// （tproxy_enabled / tproxy_dst_exceptions / tproxy_src_exceptions 等）。
+// 二者由 config 与 tproxy 两个包分别写入同一个文件，因此必须共用同一把锁，
+// 并统一采用「读—改—写」：任何一方若整文件覆写，都会把对方的字段抹掉
+// （曾导致「保存一次订阅配置，TProxy 例外列表被静默清空」）。
+//
+// 锁序约定：FileMu 永远是最内层——持有 config.Mu 或 tproxy 的 exceptionsMu
+// 时可以再取 FileMu，反之不可。
+var FileMu sync.Mutex
+
+// UpdateConfigFile 在共用文件锁下对 FluxorConfigFile 做一次「读—改—写」。
+//
+// mutate 收到文件当前的完整顶层映射（文件缺失或损坏时为空映射），就地修改后
+// 由本函数序列化写回；mutate 未触碰的键一律保留原值。
+func UpdateConfigFile(mutate func(full map[string]any)) error {
+	FileMu.Lock()
+	defer FileMu.Unlock()
+
+	full := make(map[string]any)
+	data, err := os.ReadFile(FluxorConfigFile)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if len(data) > 0 {
+		// 解析失败时从空映射重建，避免以一份已损坏的内容为基底继续写
+		if err := json.Unmarshal(data, &full); err != nil {
+			full = make(map[string]any)
+		}
+	}
+
+	mutate(full)
+
+	dir := filepath.Dir(FluxorConfigFile)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	out, err := json.MarshalIndent(full, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(FluxorConfigFile, out, 0644)
+}
+
+// ReadConfigFile 在共用文件锁下读取配置文件的顶层映射快照。
+//
+// 供 tproxy 等「旁路」字段的读取方使用，与 UpdateConfigFile 共用同一把锁，
+// 保证读到的是某次完整写入后的状态而非写入中途的内容。
+func ReadConfigFile() (map[string]any, error) {
+	FileMu.Lock()
+	defer FileMu.Unlock()
+
+	full := make(map[string]any)
+	data, err := os.ReadFile(FluxorConfigFile)
+	if err != nil {
+		return full, err
+	}
+	if err := json.Unmarshal(data, &full); err != nil {
+		return make(map[string]any), err
+	}
+	return full, nil
+}
 
 // LoadSubscribeConfig 从文件加载订阅配置（启动时调用），若失败则设置默认值
 func LoadSubscribeConfig() {
@@ -72,17 +137,27 @@ func LoadSubscribeConfig() {
 	log.Printf("成功加载订阅配置：%d 个订阅", len(Current.Subscriptions))
 }
 
-// SaveSubscribeConfig 保存订阅配置到文件
+// SaveSubscribeConfig 保存订阅配置到文件。
+//
+// 只写入 SubscribeConfig 自身承载的键，其余键（如 tproxy_*）由 UpdateConfigFile
+// 原样保留，因此本函数不会再覆盖 tproxy 包写入的字段。
 func SaveSubscribeConfig() error {
+	// 先在锁内取快照并序列化到 map，避免在持有 FileMu 时再取 config.Mu
 	Mu.Lock()
-	defer Mu.Unlock()
-	data, err := json.MarshalIndent(Current, "", "  ")
+	payload, err := json.Marshal(Current)
+	Mu.Unlock()
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(FluxorConfigFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+
+	var updates map[string]any
+	if err := json.Unmarshal(payload, &updates); err != nil {
 		return err
 	}
-	return os.WriteFile(FluxorConfigFile, data, 0644)
+
+	return UpdateConfigFile(func(full map[string]any) {
+		for k, v := range updates {
+			full[k] = v
+		}
+	})
 }

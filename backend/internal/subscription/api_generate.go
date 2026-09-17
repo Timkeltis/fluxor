@@ -147,13 +147,10 @@ func HandleGenerateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ---------- 融合模式（原有逻辑） ----------
-	// 删除旧配置
-	if _, err := os.Stat(config.ConfigTarget); err == nil {
-		if err := os.Remove(config.ConfigTarget); err != nil {
-			httpx.WriteJSONError(w, http.StatusInternalServerError, "删除旧配置文件失败: "+err.Error())
-			return
-		}
-	}
+	// 不再预先删除旧 config.yaml：GenerateConfig 会在同一路径上直接生成并覆盖
+	// （writeConfigTarget 用 os.WriteFile 整份覆写，且从不读取旧文件）。
+	// 预删除只会留出一个「文件不存在」的窗口：若随后生成失败，内核热重载或
+	// 重启就会因缺少配置而失败——此前的实现正是如此。
 
 	config.Mu.Lock()
 	config.Current = cfg

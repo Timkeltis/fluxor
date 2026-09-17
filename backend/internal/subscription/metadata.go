@@ -39,17 +39,29 @@ func fetchSubscriptionMetadataFromCore(subName string) (updatedAt string, subInf
 	return updatedAtVal, subInfoVal, nil
 }
 
-// updateAllSubscriptionsMetadata 更新所有订阅的元数据（仅用于融合模式）
+// updateAllSubscriptionsMetadata 更新所有订阅的元数据（仅用于融合模式）。
+//
+// 采用「锁外抓取、锁内写回」：抓取阶段含重试与 500ms 退避，绝不能持
+// config.Mu 进行（会长时间阻塞 /subscribe/config 等读者）；但写回阶段必须
+// 持锁——cfg.Subscriptions 与 config.Current.Subscriptions 通常是同一份底层
+// 数组，无锁写入会与 RLock 下的读取构成数据竞争。
 func updateAllSubscriptionsMetadata(cfg *config.SubscribeConfig) {
-	// 1. 备份当前全局配置中的旧元数据（用于失败时保留）
+	// 1. 锁内备份旧元数据（用于抓取失败时保留）
 	config.Mu.RLock()
-	oldSubs := make(map[string]config.Subscription)
+	oldSubs := make(map[string]config.Subscription, len(config.Current.Subscriptions))
 	for _, s := range config.Current.Subscriptions {
 		oldSubs[s.Name] = s
 	}
 	config.Mu.RUnlock()
 
-	// 2. 遍历每个订阅，尝试获取元数据
+	// 2. 锁外抓取
+	type metaResult struct {
+		name      string
+		updatedAt string
+		subInfo   map[string]interface{}
+	}
+	results := make([]metaResult, 0, len(cfg.Subscriptions))
+
 	for i := range cfg.Subscriptions {
 		name := cfg.Subscriptions[i].Name
 		var updatedAt string
@@ -71,20 +83,38 @@ func updateAllSubscriptionsMetadata(cfg *config.SubscribeConfig) {
 		if err != nil {
 			// 获取失败：尝试保留旧数据
 			if old, ok := oldSubs[name]; ok {
-				cfg.Subscriptions[i].UpdatedAt = old.UpdatedAt
-				cfg.Subscriptions[i].SubscriptionInfo = old.SubscriptionInfo
+				updatedAt, subInfo = old.UpdatedAt, old.SubscriptionInfo
 				log.Printf("保留订阅 %s 的旧元数据（获取失败）", name)
 			} else {
-				cfg.Subscriptions[i].UpdatedAt = ""
-				cfg.Subscriptions[i].SubscriptionInfo = nil
+				updatedAt, subInfo = "", nil
 				log.Printf("订阅 %s 无历史元数据，保留为空", name)
 			}
-			continue
+		} else {
+			log.Printf("更新订阅 %s 元数据成功", name)
 		}
 
-		// 获取成功，更新
-		cfg.Subscriptions[i].UpdatedAt = updatedAt
-		cfg.Subscriptions[i].SubscriptionInfo = subInfo
-		log.Printf("更新订阅 %s 元数据成功", name)
+		results = append(results, metaResult{name: name, updatedAt: updatedAt, subInfo: subInfo})
+	}
+
+	// 4. 锁内一次性写回（临界区只做字段赋值）
+	config.Mu.Lock()
+	defer config.Mu.Unlock()
+	for _, r := range results {
+		for i := range cfg.Subscriptions {
+			if cfg.Subscriptions[i].Name == r.name {
+				cfg.Subscriptions[i].UpdatedAt = r.updatedAt
+				cfg.Subscriptions[i].SubscriptionInfo = r.subInfo
+				break
+			}
+		}
+		// 同时写入当前生效配置：二者通常共享底层数组，但若期间 Current 已被
+		// 其它请求替换，则需保证全局状态也能拿到最新元数据。
+		for i := range config.Current.Subscriptions {
+			if config.Current.Subscriptions[i].Name == r.name {
+				config.Current.Subscriptions[i].UpdatedAt = r.updatedAt
+				config.Current.Subscriptions[i].SubscriptionInfo = r.subInfo
+				break
+			}
+		}
 	}
 }

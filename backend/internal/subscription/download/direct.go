@@ -11,6 +11,12 @@ import (
 	"time"
 )
 
+// directDownloadTimeout 直连下载的单次超时。
+//
+// 下载链路为「直连 → 失败则回退临时内核」，两阶段各以 15 秒为上限，
+// 且任一阶段都不做内部重试：超时或失败即如实报错，由用户决定是否再次手动更新。
+const directDownloadTimeout = 15 * time.Second
+
 // tryDirectDownload 尝试直接 HTTP 下载订阅。
 //
 // 仅接受原样即为 Clash 明文 YAML（含 proxies / proxy-providers / proxy-groups）的响应。
@@ -18,7 +24,7 @@ import (
 // 返回错误，由调用方回退到临时内核——解码与格式识别属于内核能力，Fluxor 不再自行实现。
 func tryDirectDownload(sub config.Subscription, targetFile string) (updatedAt string, subInfo map[string]interface{}, err error) {
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: directDownloadTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("too many redirects")
