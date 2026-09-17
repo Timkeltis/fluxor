@@ -272,6 +272,8 @@ func main() {
 
 	// 内核控制
 	mux.HandleFunc(config.BaseURL+"/core/status", core.HandleCoreStatus)
+	// 内核状态变更的 SSE 推送（前端据此替代轮询）
+	mux.HandleFunc(config.BaseURL+"/core/events", core.HandleCoreEvents)
 	mux.HandleFunc(config.BaseURL+"/core/start", core.HandleCoreStart)
 	mux.HandleFunc(config.BaseURL+"/core/stop", core.HandleCoreStop)
 	mux.HandleFunc(config.BaseURL+"/core/restart", core.HandleCoreRestart)
@@ -371,6 +373,14 @@ func main() {
 	} else {
 		fmt.Println("内核已在运行，跳过自动启动")
 	}
+
+	// 无条件发布一次初态，确保 SSE hub 的状态「已确定」。
+	//
+	// 这一步是必需的：hub 的「接入即快照」依赖它已知道当前状态，否则
+	// 新订阅者接入后收不到任何事件——而 /core/events 是前端启动时获取
+	// 内核状态的唯一来源（启动阶段不再请求 /core/status）。
+	// 内核确实在跑时（StartCore 内部已发布一次）此调用因状态未变化而成为空操作。
+	core.PublishCoreState(core.IsCoreRunning())
 
 	// === 启动服务 ===
 	if listener != nil {

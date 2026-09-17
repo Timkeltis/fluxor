@@ -267,8 +267,9 @@ onMounted(async () => {
   document.addEventListener('selectstart', handleSelectStart)
   document.addEventListener('copy', handleCopy as EventListener)
 
-  // 订阅内核状态
-  overviewStore.fetchVersionAndStatus()   // 立即获取一次初始状态
+  // 订阅内核状态。
+  // 不再预先请求 /core/status：/core/events 接入即下发一次快照，
+  // 覆盖首次加载所需的状态与内核版本。
   overviewStore.subscribeStatus() 
   
   // 并行加载订阅配置、内核配置、TProxy 状态

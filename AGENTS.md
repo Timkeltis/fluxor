@@ -38,7 +38,7 @@ fluxor/
     ├── index.html         # HTML 入口（Go 模板：{{.BaseHref}} / {{.RawBase}}）
     └── src/
         ├── main.ts        # 挂载 Pinia + vue-i18n (Composition API, legacy:false)
-        ├── App.vue        # 根组件：响应式侧边栏/移动端底部 Tab、亮暗/跟随系统主题、中英切换、Toast 队列、Promise 确认框、统一轮询 coreStatus 状态
+        ├── App.vue        # 根组件：响应式侧边栏/移动端底部 Tab、亮暗/跟随系统主题、中英切换、Toast 队列、Promise 确认框
         ├── env.d.ts       # .vue 类型声明 & Window.BASE_URL 接口扩展
         ├── i18n.ts        # 全站国际化（zh/en），从 localStorage 读取语言偏好，禁止硬编码中文
         ├── index.css      # Tailwind v4 入口（@import/@source/@custom-variant/@theme/@utility，取代原 tailwind.config.js）
@@ -46,13 +46,13 @@ fluxor/
         ├── components/    # 公共及细粒度组件 (ProxyGroupCard, FormSwitch)
         ├── composables/   # 全局解耦组合式函数 (useTheme, useLanguage)
         ├── utils/
-        │   ├── api.ts     # withBase() 拼接 BASE_URL、apiFetch() HTTP 封装、wsConnect() WebSocket 封装（自动 ws/wss 协议选择）
+        │   ├── api.ts     # withBase()、apiFetch() HTTP 封装、wsConnect() WebSocket 封装、sseConnect() SSE 封装
         │   └── mock.ts    # 前端离线开发模拟器：拦截 HTTP/WS 请求提供 mock 数据，支持脱离后端独立测试
         ├── store/
         │   ├── global.ts   # 标签页激活状态、侧边栏折叠、亮暗/跟随系统主题、Toast 队列（3s 自动消失）、Promise 驱动确认框
-        │   ├── config.ts   # 内核常规配置参数（allow-lan/ipv6/mode/log-level/tun/端口等，通过 app.vue 统一轮询 coreStatus，与订阅解耦）
+        │   ├── config.ts   # 内核常规配置参数（allow-lan/ipv6/mode/log-level/tun/端口等，由 app.vue 统一订阅，与订阅解耦）
         │   ├── subscription.ts # 订阅管理 Pinia Store：负责订阅配置 CRUD、解析及状态更新，由 config.ts 中拆分解耦而来
-        │   ├── overview.ts # 仪表盘实时统计（速度/流量/内存/连接数/版本/当前节点）、60 点流量历史、3 路 WS + 1 路 HTTP 轮询
+        │   ├── overview.ts # 仪表盘实时统计（速度/流量/内存/连接数/版本/当前节点）、60 点流量历史、3 路 WS + 1 路 SSE
         │   ├── proxies.ts  # 代理组列表、节点延迟字典、手风琴展开状态、并发受限（10）批量测速
         │   ├── connections.ts # 活跃/已关闭连接列表、汇总统计、排序/搜索、WS 瞬时速率计算（快照差分）
         │   ├── rules.ts    # 规则列表、规则提供商列表、fetch/refresh 方法
@@ -67,7 +67,7 @@ fluxor/
             └── Subscription.vue # 订阅：代理/面板端口、密钥显隐切换、规则集（lite/base/full）、UI 面板选择、订阅 CRUD 模态框（zoomIn 动画，支持订阅名称、链接、检测间隔、节点前缀）、流量/健康度/有效期卡片、「保存并应用」
 ```
 
-> **构建流程**：`make` → ① 清理旧 `frontend/dist` 与 `backend/dist`；② `npm run build` 输出到 `frontend/dist/`；③ 拷贝至 `backend/dist/`；④ 在 `backend/` 内 `go build -ldflags` （依赖 `//go:embed dist`，同时注入版本号）输出到项目根目录 `./fluxor`。版本号用 `make V=1.0.0` 指定，缺省 `dev`。
+> **构建流程**：`make` → ① 清理旧 `frontend/dist` 与 `backend/dist`；② `npm run build` 输出到 `frontend/dist/`；③ 拷贝至 `backend/dist/`；④ 在 `backend/` 内 `go build -ldflags` （依赖 `//go:embed dist`，同时注入版本号）输出到项目根目录 `./fluxor`。版本号用 `make V=1.0.0` 指定，缺省 `1.0.0`（`make V=dev` 可产出不参与更新判断的调试版本）。
 
 > **页面路由机制**：未使用 vue-router，通过 `globalStore.activeTab` 与 `<component :is="..." />` 动态组件切换视图。在此基础上，外层包裹了 `<KeepAlive :max="7">`（与视图总数一致，避免 LRU 淘汰引发的重挂）进行视图缓存，以长效留存页面各交互状态（如滚动进度与折叠状态）并规避切换页面时的重复连接请求。
 
@@ -243,7 +243,8 @@ func (c *cancelableReadCloser) Close() error {
 | `/` | GET | `web.HandleIndex` | SPA 主页模板渲染 |
 | `/whoami` | GET | `web.HandleWhoAmI` | 获取当前用户信息 / 角色 |
 | `/app-version` | GET | `web.HandleAppVersion` | 获取 Fluxor 版本号（编译期注入，供前端展示与更新检查） |
-| `/core/status` | GET | `core.HandleCoreStatus` | 内核运行状态（PID 文件检测） |
+| `/core/status` | GET | `core.HandleCoreStatus` | 内核运行状态（PID 文件检测）；仅供启停操作后确认与 SSE 降级兜底，启动阶段不再调用 |
+| `/core/events` | SSE | `core.HandleCoreEvents` | 内核运行状态变更推送（替代前端轮询） |
 | `/core/start` | POST | `core.HandleCoreStart` | 启动内核进程 |
 | `/core/stop` | POST | `core.HandleCoreStop` | 停止内核进程（SIGTERM） |
 | `/core/restart` | POST | `core.HandleCoreRestart` | 热重启（重载配置） |
@@ -332,6 +333,20 @@ func (c *cancelableReadCloser) Close() error {
 4. **进程回收必须有界**：清理临时内核时的 `cmd.Wait()` 等待必须加上限。它的 stdout 拷贝 goroutine 可能因子进程继续持有管道写端而长期不返回，无界等待会突破 15s 上限甚至永久阻塞。
 
 > 两阶段的 15 秒是**串行**的：最坏情况（直连超时后再回退临时内核并超时）单次更新约 30 秒。这是刻意的取舍——回退机制本身要保留，但每一段都不再各自放大 3 倍。
+
+### 3.8 内核状态推送（SSE）与轮询替代
+
+内核运行状态（`/core/status`）**不再轮询**，改由后端经 SSE 主动推送（`GET /core/events`，实现在 `core/events.go`）。要点：
+
+1. **两条变更来源都必须广播**：本进程发起的启停操作，以及内核**自行退出**（崩溃 / 被外部 `kill -9` / OOM）。后者由 `StartCore` 中等待子进程的 goroutine 在 `cmd.Wait()` 返回后调用 `PublishCoreState(false)` 捕获——这是轮询原本承担的主要职责，漏掉会导致前端永远显示「运行中」。
+2. **事件模型是「最新状态即真相」**：hub 不排队历史事件，只保存当前状态；新订阅者接入时立即收到一次快照，之后仅在状态**真正变化**时推送（`publish` 内部比对，重复调用不产生重复事件）。
+3. **锁的职责**：`pubMu` 串行化发布以保证事件顺序，`mu` 只保护状态字段与订阅者集合。发布路径**不做任何网络 IO**（事件只承载状态，不夹带版本）。
+4. **慢订阅者丢弃而非阻塞**：投递用非阻塞 `select`，通道满则丢该条；前端重连或下次状态变化时会重新校正，且 `GET /core/status` 始终可用作兜底。
+5. **SSE 必须抗代理缓冲**：响应设置 `X-Accel-Buffering: no`，并每 25 秒发送 `: ping` 注释心跳，避免中间反代因空闲断开或缓冲。
+6. **状态走 SSE，版本走 `/version`**：`/core/events` **只推运行状态**，不承载内核版本——版本是内核原生 API `/version` 的职责，由前端在状态变为「运行中」时按需请求。前端启动时**不再**预请求 `/core/status`（接入快照已含状态）。因此 hub 的「已确定状态」是硬性前提——`main.go` 在自动启动内核后**无条件**调用一次 `PublishCoreState(core.IsCoreRunning())`。若漏掉：内核已在运行时不经过 `StartCore`、或内核未运行，`known` 均为 false，新订阅者将收不到任何快照。
+7. **前端必须有兜底**：SSE 可能被中间反代缓冲/剥离。`overview.ts` 起一个 5 秒看门狗——超时未收到任何事件（含接入快照）才降级请求一次 `/core/status`；正常收到事件立即清除，**不产生额外请求**。内核版本由 `ensureCoreVersion()` 在「运行中」且尚未取得时请求一次 `/version`（取到即不再重复）。浏览器 `EventSource` 自带重连，前端**不要**再叠加握手超时（与 `wsConnect` 不同）。
+
+> `/core/status` 保留：供内核启停/重启/升级操作后由前端主动确认，以及上述 SSE 降级兜底。启动阶段不调用。
 
 ---
 

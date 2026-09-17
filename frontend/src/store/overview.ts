@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { wsConnect, apiFetch } from '../utils/api'
+import { wsConnect, sseConnect, apiFetch } from '../utils/api'
 import { useProxyStore } from './proxies'
 
 export interface DashboardStats {
@@ -217,75 +217,128 @@ export const useOverviewStore = defineStore('overview', () => {
     }
   }
 
-  // === Status Polling ===
+  // === Core status (SSE 推送) ===
+  //
+  // 内核运行状态由后端经 SSE（/core/events）推送，不再轮询、启动时也不再预请求
+  // /core/status：该端点接入即下发一次带内核版本的快照，已覆盖首次加载所需信息。
+  // 订阅者计数 + 防抖断开，与其它实时流保持一致的生命周期语义。
   const statusSubscribers = ref(0)
-  let statusTimer: any = null
+  let statusSse: { close: () => void } | null = null
+  let statusDisconnectTimer: any = null
 
-  // 防并发状态锁，避免重叠发起轮询请求
-  let isFetchingStatus = false
+  // 快照看门狗：SSE 若因中间代理缓冲/剥离而迟迟不推送，则降级拉取一次。
+  // 正常情况下事件即刻到达、看门狗被清除，不会产生额外请求。
+  const SSE_SNAPSHOT_TIMEOUT = 5000
+  let statusSnapshotTimer: any = null
 
-  const fetchVersionAndStatus = async () => {
-    if (isFetchingStatus) return
-    isFetchingStatus = true
+  const clearSnapshotTimer = () => {
+    if (statusSnapshotTimer) {
+      clearTimeout(statusSnapshotTimer)
+      statusSnapshotTimer = null
+    }
+  }
+
+  // 内核版本：由内核原生 API /version 提供。
+  //
+  // 不随 SSE 事件下发——SSE 只承载运行状态。此处在内核为「运行中」时补取一次，
+  // 取到即不再重复请求（'加载中...' / '未知' / 空 视为尚未取到）。
+  const ensureCoreVersion = async () => {
+    if (stats.value.coreVersion !== '加载中...' && stats.value.coreVersion !== '未知' && stats.value.coreVersion !== '') {
+      return
+    }
     try {
-      const hasVersion = stats.value.coreVersion !== '加载中...' && stats.value.coreVersion !== '未知'
-      const [versionResp, statusResp] = await Promise.all([
-        hasVersion ? Promise.resolve(null) : apiFetch('/version').catch(() => null),
-        apiFetch('/core/status').catch(() => null)
-      ])
-
-      let isRunning = false
-      if (statusResp && statusResp.ok) {
-        const s = await statusResp.json()
-        isRunning = s.running
-      }
-      stats.value.running = isRunning
-
-      if (!isRunning) {
-        stats.value.currentNode = '内核未启动'
-        stats.value.currentGroup = '内核未启动'
-        stats.value.uploadSpeed = 0
-        stats.value.downloadSpeed = 0
-        stats.value.memory = 0
-        stats.value.coreVersion = '加载中...'
+      const resp = await apiFetch('/version')
+      if (resp.ok) {
+        const v = await resp.json()
+        stats.value.coreVersion = (v.version || '').replace(/^v/, '')
       } else {
-        if (!hasVersion) {
-          if (versionResp && versionResp.ok) {
-            const v = await versionResp.json()
-            stats.value.coreVersion = (v.version || '').replace(/^v/, '')
-          } else {
-            stats.value.coreVersion = '未知'
-          }
-        }
-        // 内核运行时，节点信息由 syncCurrentNodeFromProxyStore 负责更新
+        stats.value.coreVersion = '未知'
       }
-    } catch (e) {
-      console.warn('定时获取状态异常', e)
+    } catch {
+      stats.value.coreVersion = '未知'
+    }
+  }
+
+  // 按运行状态重置派生显示
+  const applyRunningState = (running: boolean) => {
+    stats.value.running = running
+    if (!running) {
       stats.value.currentNode = '内核未启动'
       stats.value.currentGroup = '内核未启动'
       stats.value.uploadSpeed = 0
       stats.value.downloadSpeed = 0
       stats.value.memory = 0
-    } finally {
-      isFetchingStatus = false
+      stats.value.coreVersion = '加载中...'
+      return
+    }
+    // 内核运行中：若尚未取得版本则补取一次
+    ensureCoreVersion()
+  }
+
+  const onStatusEvent = (data: any) => {
+    clearSnapshotTimer() // 已收到推送，看门狗不再需要
+    applyRunningState(!!data?.running)
+  }
+
+  const startStatusSse = () => {
+    statusSse = sseConnect('/core/events', 'core-state', onStatusEvent)
+    // 兜底：若 5 秒内没有任何事件（含接入快照），降级为一次 /core/status
+    clearSnapshotTimer()
+    statusSnapshotTimer = setTimeout(() => {
+      statusSnapshotTimer = null
+      if (statusSubscribers.value > 0) {
+        fetchVersionAndStatus()
+      }
+    }, SSE_SNAPSHOT_TIMEOUT)
+  }
+
+  // fetchVersionAndStatus 主动拉取一次状态与内核版本。
+  //
+  // 用途：① SSE 建连失败/被缓冲时的降级兜底；② 内核启停、重启、升级等操作后
+  // 立即确认结果，无需等待推送。
+  const fetchVersionAndStatus = async () => {
+    try {
+      const resp = await apiFetch('/core/status')
+      if (resp.ok) {
+        const s = await resp.json()
+        const running = !!s.running
+        stats.value.running = running
+        if (running) {
+          await ensureCoreVersion()
+        } else {
+          applyRunningState(false)
+        }
+      }
+    } catch (e) {
+      console.warn('获取内核状态失败', e)
+      applyRunningState(false)
     }
   }
 
   const subscribeStatus = () => {
     statusSubscribers.value++
     if (statusSubscribers.value === 1) {
-      fetchVersionAndStatus()
-      statusTimer = setInterval(fetchVersionAndStatus, 20000)
+      // 取消待执行的防抖断开
+      if (statusDisconnectTimer) {
+        clearTimeout(statusDisconnectTimer)
+        statusDisconnectTimer = null
+      }
+      startStatusSse()
     }
   }
 
   const unsubscribeStatus = () => {
     statusSubscribers.value = Math.max(0, statusSubscribers.value - 1)
     if (statusSubscribers.value === 0) {
-      if (statusTimer) {
-        clearInterval(statusTimer)
-        statusTimer = null
-      }
+      clearSnapshotTimer()
+      // 防抖 3 秒：页面快速切换时不至于反复断开/重建 SSE
+      statusDisconnectTimer = setTimeout(() => {
+        if (statusSubscribers.value === 0 && statusSse) {
+          statusSse.close()
+          statusSse = null
+        }
+        statusDisconnectTimer = null
+      }, 3000)
     }
   }
 

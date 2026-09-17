@@ -109,8 +109,7 @@ let mockTproxyDstExceptions = ['# 公共 DNS 服务器', '223.5.5.5', '1.12.12.1
 let mockTproxySrcExceptions = ['# Docker 默认网段', '172.17.0.0/16']
 
 // 模拟 HTTP API
-export function handleMockFetch(path: string, options: RequestInit = {}): Response {
-  const method = (options.method || 'GET').toUpperCase()
+export function handleMockFetch(path: string, options: RequestInit = {}): Response {  const method = (options.method || 'GET').toUpperCase()
   const cleanPath = path.split('?')[0].replace(/\/$/, '')
 
   // 快捷响应封装
@@ -311,5 +310,44 @@ export class MockWebSocket {
     setTimeout(() => {
       if (this.onclose) this.onclose()
     }, 10)
+  }
+}
+
+// 模拟后端的内核状态 SSE（/core/events）。
+//
+// 与真实实现保持同样的语义：连接后先推一次当前快照，之后仅在状态变化时推送。
+// 这里通过轮询本地 coreRunning 变量来模拟「后端主动推送」。
+export function createMockSse(
+  path: string,
+  onEvent: (data: any) => void,
+  handlers: { onOpen?: () => void; onError?: (ev: Event) => void } = {}
+) {
+  let lastSent: boolean | null = null
+  let closed = false
+  let pollTimer: any = null
+
+  const openTimer = setTimeout(() => {
+    if (closed) return
+    if (handlers.onOpen) handlers.onOpen()
+    // 首次快照
+    lastSent = coreRunning
+    onEvent({ running: coreRunning, ts: Date.now() })
+
+    // 每 500ms 检查一次，状态变化时推送（模拟服务端主动推送）
+    pollTimer = setInterval(() => {
+      if (closed) return
+      if (coreRunning !== lastSent) {
+        lastSent = coreRunning
+        onEvent({ running: coreRunning, ts: Date.now() })
+      }
+    }, 500)
+  }, 50)
+
+  return {
+    close: () => {
+      closed = true
+      clearTimeout(openTimer)
+      if (pollTimer) clearInterval(pollTimer)
+    }
   }
 }

@@ -173,11 +173,19 @@ func StartCore() error {
 		return fmt.Errorf("写入 PID 文件失败: %v", err)
 	}
 
-	// 后台等待进程退出
+	// 后台等待进程退出。
+	//
+	// 内核可能自行退出（崩溃、被外部 kill -9、OOM），此时 PID 文件需要清理，
+	// 并且必须向外广播「已停止」——否则前端会一直以为内核仍在运行。
 	go func() {
 		cmd.Wait()
 		os.Remove(config.CorePidFile)
+		PublishCoreState(false)
 	}()
+
+	// 广播「已启动」。放在 goroutine 启动之后：此刻 PID 文件已写入，
+	// IsCoreRunning() 已为 true，前端收到事件后再查状态能保持一致。
+	PublishCoreState(true)
 
 	return nil
 }
@@ -230,5 +238,8 @@ func StopCore() error {
 
 	os.Remove(config.CorePidFile)
 	_ = os.Remove(config.CoreSocket)
+	// 通知所有 SSE 订阅者：内核已停止（StartCore 中等待进程的 goroutine 也会
+	// 广播一次，但 hub 仅在状态真正变化时才推送，因此不会产生重复事件）。
+	PublishCoreState(false)
 	return nil
 }

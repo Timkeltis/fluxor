@@ -95,3 +95,46 @@ export function wsConnect(
 
   return ws;
 }
+
+export interface SseHandlers {
+  onOpen?: () => void;
+  onError?: (ev: Event) => void;
+}
+
+// sseConnect 建立 SSE 连接，按事件名分发消息。
+//
+// 用于后端的内核状态推送（/core/events）。与 wsConnect 不同，SSE 不做
+// 握手超时处理：浏览器原生 EventSource 自带断线重连（默认约 3 秒），
+// 若在此再叠加超时关闭反而会干扰其重连节奏。
+export function sseConnect(
+  path: string,
+  eventName: string,
+  onEvent: (data: any) => void,
+  handlers: SseHandlers = {}
+): { close: () => void } {
+  if (isMockEnabled() && mock) {
+    return mock.createMockSse(path, onEvent, handlers);
+  }
+
+  const es = new EventSource(withBase(path));
+
+  es.addEventListener('open', () => {
+    if (handlers.onOpen) handlers.onOpen();
+  });
+
+  es.addEventListener(eventName, (ev: MessageEvent) => {
+    try {
+      onEvent(JSON.parse(ev.data));
+    } catch (err) {
+      // 单条负载异常不应中断整个流
+    }
+  });
+
+  es.addEventListener('error', (ev: Event) => {
+    if (handlers.onError) handlers.onError(ev);
+  });
+
+  return {
+    close: () => es.close()
+  };
+}
