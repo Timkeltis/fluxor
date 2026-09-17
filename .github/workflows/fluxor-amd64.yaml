@@ -37,8 +37,26 @@ jobs:
           echo "VERSION=$V" >> $GITHUB_OUTPUT
           echo "构建版本号: $V"
 
-      - name: 构建（前端 + 同步 + 后端，注入版本号）
-        run: make V=${{ steps.version.outputs.VERSION }}
+      - name: 清理旧构建产物
+        run: rm -rf frontend/dist backend/dist fluxor
+
+      - name: 构建前端 (frontend → frontend/dist)
+        working-directory: ./frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: 同步前端构建产物到 backend/dist
+        run: |
+          rm -rf backend/dist
+          cp -r frontend/dist backend/dist
+
+      - name: 构建 Go 后端（amd64，注入版本号）
+        working-directory: ./backend
+        run: |
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+            go build -ldflags="-s -w -X fluxor/internal/buildinfo.Version=${{ steps.version.outputs.VERSION }}" \
+            -o ../fluxor
 
       - name: 上传 fluxor 二进制作为 Artifact
         uses: actions/upload-artifact@v6
