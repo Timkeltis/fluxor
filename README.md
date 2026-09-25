@@ -158,6 +158,15 @@ fluxor/
 
 ## fnOS 安装包归档
 
+`v2.6.0` 安装包完整归档自 [FnDepot 2026.9.25](https://github.com/shuangji66/FnDepot/releases/tag/2026.9.25)。本仓库同时保留 Fluxor 源代码，FPK 仅作为对应版本的 fnOS 安装产物；后续维护应优先修改源代码并重新构建。
+
+| 架构 | 安装包 | SHA-256 |
+| --- | --- | --- |
+| ARM64 | [`Fluxor-2.6.0-arm.fpk`](packages/Fluxor-2.6.0-arm.fpk) | `5e16ea2d971cddef044f30fe5bf5a1854490de097c10f862d4636e3ae617a61e` |
+| x86_64 | [`Fluxor-2.6.0-x86.fpk`](packages/Fluxor-2.6.0-x86.fpk) | `acf0de921018e3f91e169b49cbfa749a2c857f46b9149d07a44b0aa1accfbdb8` |
+
+来源说明：FPK 由 `shuangji66/FnDepot` 发布，本次迁移对应 Release `2026.9.25`；上游项目来源与许可证信息见 [LICENSE](LICENSE)。
+
 `v2.5.1` 发布中的安装包迁移自 [FnDepot 2026.7.26](https://github.com/shuangji66/FnDepot/releases/tag/2026.7.26)：
 
 | 架构 | 安装包 | SHA-256 |
